@@ -1,5 +1,6 @@
 {
-  "qiyuan": "/data1/shared/hugging_face/Llama-2-7b-hf",
-  "yes": "/home/dataset/llama-2-7b-chat-hf",
-  "fuse0": "/home/dataset/llama-2-7b-chat-hf"
+    "yes": "/dummy/path",
+    "qiyuan": "/dummy/path",
+    "fuse0": "/dummy/path",
+    "amax": "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 }
