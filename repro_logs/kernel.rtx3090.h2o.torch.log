@@ -1,0 +1,21 @@
+model='h2o' system='torch' seqlen=4096
+Traceback (most recent call last):
+  File "/data2/ldz/FlashTensor-AE/run_kernel.py", line 101, in <module>
+    main()
+  File "/data2/ldz/FlashTensor-AE/baseline_venv/lib/python3.10/site-packages/click/core.py", line 1157, in __call__
+    return self.main(*args, **kwargs)
+  File "/data2/ldz/FlashTensor-AE/baseline_venv/lib/python3.10/site-packages/click/core.py", line 1078, in main
+    rv = self.invoke(ctx)
+  File "/data2/ldz/FlashTensor-AE/baseline_venv/lib/python3.10/site-packages/click/core.py", line 1434, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+  File "/data2/ldz/FlashTensor-AE/baseline_venv/lib/python3.10/site-packages/click/core.py", line 783, in invoke
+    return __callback(*args, **kwargs)
+  File "/data2/ldz/FlashTensor-AE/run_kernel.py", line 47, in main
+    specs = model.prepare(q_len=seqlen, kv_len=seqlen)
+  File "/data2/ldz/FlashTensor-AE/asuka_exp/cases/kernels/h2o.py", line 42, in prepare
+    q = torch.randn(batch_size, q_len, self.head_num, self.head_dim, dtype=dtype, device=device)
+RuntimeError: CUDA error: out of memory
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1.
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
