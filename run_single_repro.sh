@@ -33,18 +33,18 @@ fi
 export PROJECT_DIR=${PROJECT_DIR}
 export PYTHONPATH=${PROJECT_DIR}:${PYTHONPATH}
 export HF_HOME="/data2/ldz/hf_cache"
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=2
 
 # === 执行命令 ===
 if [[ "$EXP" == "kernel" ]]; then
     # 运行 Kernel 实验
     # 注意：这里假设 run_kernel.py 已经在根目录 (根据之前的 setup)
-    python run_kernel.py -m $MODEL -s $SYS --no-check 2>&1 | tee ${LOG_DIR}/kernel.${DEVICE}.${MODEL}.${SYS}.log
-
+    #python run_kernel.py -m $MODEL -s $SYS --no-check 2>&1 | tee ${LOG_DIR}/kernel.${DEVICE}.${MODEL}.${SYS}.log
+    python run_kernel.py -m $MODEL -s $SYS --seqlen 2048 --no-check 2>&1 | tee ${LOG_DIR}/kernel.${DEVICE}.${MODEL}.${SYS}.log
 elif [[ "$EXP" == "e2e" ]]; then
     # 运行 E2E 实验
     # -p amax 对应 weight_zoo.json 里的配置
-    python run_e2e.py -p amax -m $MODEL -s $SYS 2>&1 | tee ${LOG_DIR}/e2e.${DEVICE}.${MODEL}.${SYS}.log
+    python run_e2e.py -p amax -m $MODEL -s $SYS --seqlen 2048 2>&1 | tee ${LOG_DIR}/e2e.${DEVICE}.${MODEL}.${SYS}.log
 
 else
     echo "Invalid experiment type: $EXP"

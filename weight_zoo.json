@@ -2,5 +2,5 @@
     "yes": "/dummy/path",
     "qiyuan": "/dummy/path",
     "fuse0": "/dummy/path",
-    "amax": "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    "amax": "/data2/ldz/llama2_7b_local"
 }

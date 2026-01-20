@@ -1,21 +1,11 @@
-model='gemma2' system='torch' seqlen=4096
-Traceback (most recent call last):
-  File "/data2/ldz/FlashTensor-AE/run_kernel.py", line 101, in <module>
-    main()
-  File "/data2/ldz/FlashTensor-AE/baseline_venv/lib/python3.10/site-packages/click/core.py", line 1157, in __call__
-    return self.main(*args, **kwargs)
-  File "/data2/ldz/FlashTensor-AE/baseline_venv/lib/python3.10/site-packages/click/core.py", line 1078, in main
-    rv = self.invoke(ctx)
-  File "/data2/ldz/FlashTensor-AE/baseline_venv/lib/python3.10/site-packages/click/core.py", line 1434, in invoke
-    return ctx.invoke(self.callback, **ctx.params)
-  File "/data2/ldz/FlashTensor-AE/baseline_venv/lib/python3.10/site-packages/click/core.py", line 783, in invoke
-    return __callback(*args, **kwargs)
-  File "/data2/ldz/FlashTensor-AE/run_kernel.py", line 47, in main
-    specs = model.prepare(q_len=seqlen, kv_len=seqlen)
-  File "/data2/ldz/FlashTensor-AE/asuka_exp/cases/kernels/gemma2.py", line 42, in prepare
-    q = torch.randn(batch_size, q_len, self.head_num, self.head_dim, dtype=dtype, device=device)
-RuntimeError: CUDA error: out of memory
-CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
-For debugging consider passing CUDA_LAUNCH_BLOCKING=1.
-Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
-
+model='gemma2' system='torch' seqlen=2048
+input_names=['q', 'k', 'v']
+output_names=['out']
+check=False
+start_peak_mem_mib=48.0
+end_peak_mem_mib=1344.125
+gflops=34.359738368
+mib=1344.125
+warmup start
+warmup done
+[torch] avg 8.1524 ms, min 8.1303 ms, max 8.1844 ms, 4214.670774904614 gflops/s (10 runs, 100 warmups, profiled)
