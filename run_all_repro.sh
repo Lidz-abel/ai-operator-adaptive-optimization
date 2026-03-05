@@ -20,7 +20,7 @@ MODELS=("attn" "h2o" "gemma2")
 # === 选取的系统 ===
 # torch: Baseline
 # our: FlashTensor
-SYSTEMS=("torch" "our")
+SYSTEMS=("dynamo" "our")
 
 # === 1. 运行 Kernel 实验 ===
 echo "##############################################"
@@ -29,8 +29,13 @@ echo "##############################################"
 
 for sys in "${SYSTEMS[@]}"; do
     for model in "${MODELS[@]}"; do
-        echo "[Kernel] Running $model on $sys..."
-        ./run_single_repro.sh kernel $model $sys
+        if [[ "$sys" == "dynamo" ]]; then
+            fg_flag="full"
+        else
+            fg_flag="nofull"
+        fi
+        echo "[Kernel] Running $model on $sys with fullgraph=$fg_flag..."
+        ./run_single_repro.sh kernel $model $sys $fg_flag
         echo "----------------------------------------------"
     done
 done
@@ -42,8 +47,13 @@ echo "##############################################"
 
 for sys in "${SYSTEMS[@]}"; do
     for model in "${MODELS[@]}"; do
-        echo "[E2E] Running $model on $sys..."
-        ./run_single_repro.sh e2e $model $sys
+        if [[ "$sys" == "dynamo" ]]; then
+            fg_flag="full"
+        else
+            fg_flag="nofull"
+        fi
+        echo "[E2E] Running $model on $sys with fullgraph=$fg_flag..."
+        ./run_single_repro.sh e2e $model $sys $fg_flag
         echo "----------------------------------------------"
     done
 done

@@ -59,7 +59,9 @@ def llm_setup(weight_path, seqlen, layer_num):
 @click.option('--seqlen', type=int, default=4096, help='seqlen')
 @click.option('--layer_num', type=int, default=None, help='layer_num')
 @click.option('--platform', '-p', default='yes', help='platform(yes, qiyuan, fuse0)')
-def main(model, system, seqlen, layer_num, platform):
+@click.option('--fullgraph/--no-fullgraph', default=False, help='Enable full graph compilation of the whole model using torch.compile')
+#全圖優化選項
+def main(model, system, seqlen, layer_num, platform,fullgraph):
   print(f"{model=} {system=} {seqlen=} {layer_num=}")
   assert model in KERNEL_ZOO, f"model {model} not found in KERNEL_ZOO {KERNEL_ZOO.keys}"
   seed = 0
@@ -92,7 +94,6 @@ def main(model, system, seqlen, layer_num, platform):
   print(f"{weight_zoo_path=}")
   with open(weight_zoo_path, "r") as f:
     weight_zoo = json.load(f)
-
   weight_path = weight_zoo[platform]
   hf_config, token_ids = llm_setup(weight_path, seqlen, layer_num)
 
@@ -104,6 +105,10 @@ def main(model, system, seqlen, layer_num, platform):
   for param in model.parameters():
     param.requires_grad = False
   model = model.eval().cuda()
+
+  if fullgraph:#全圖優化
+    print("Applying torch.compile to the whole model with fullgraph=True")
+    model = torch.compile(model)
 
   run = 50
   warmup = 50

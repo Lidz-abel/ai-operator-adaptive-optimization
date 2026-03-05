@@ -32,7 +32,9 @@ def gflops_and_mib(seqlen, f, *args):
 @click.option('--seqlen', default=4096, help='seqlen')
 @click.option('--show_result', is_flag=True, help='show result')
 @click.option('--check/--no-check', default=True, help='check result with torch')
-def main(model, system, seqlen, show_result, check):
+@click.option('--fullgraph/--no-fullgraph', default=False, help='Enable full graph compilation of the whole model using torch.compile')
+#全圖優化選項，此處只測試單個算子，所以沒有使用？
+def main(model, system, seqlen, show_result, check,fullgraph):
   print(f"{model=} {system=} {seqlen=}")
   assert model in KERNEL_ZOO, f"model {model} not found in KERNEL_ZOO {KERNEL_ZOO.keys()}"
 

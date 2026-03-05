@@ -1,15 +1,26 @@
 #!/bin/bash
 set -e
 
-# 参数检查
-if [ "$#" -ne 3 ]; then
-  echo "Usage: $0 <exp: kernel|e2e> <model> <sys: torch|our>"
+# === 1. 修改参数检查，现在接收 4 个参数 ===
+if [ "$#" -ne 4 ]; then
+  echo "Usage: $0 <exp: kernel|e2e> <model> <sys: torch|our> <fullgraph: full|nofull>"
   exit 1
 fi
 
 EXP=$1
 MODEL=$2
 SYS=$3
+FULLGRAPH_FLAG=$4   # 应为 "full" 或 "nofull"
+
+# === 根据 flag 生成 fullgraph 选项 ===
+if [[ "$FULLGRAPH_FLAG" == "full" ]]; then
+    FULLGRAPH_OPT="--fullgraph"
+elif [[ "$FULLGRAPH_FLAG" == "nofull" ]]; then
+    FULLGRAPH_OPT="--no-fullgraph"
+else
+    echo "Error: fullgraph parameter must be 'full' or 'nofull'"
+    exit 1
+fi
 
 # === 路径配置 ===
 PROJECT_DIR=$(readlink -f .)
@@ -19,10 +30,9 @@ mkdir -p ${LOG_DIR}
 # 硬件标识
 DEVICE="rtx3090"
 
-echo ">>> [Single Run] Exp=$EXP, Device=$DEVICE, Model=$MODEL, System=$SYS"
+echo ">>> [Single Run] Exp=$EXP, Device=$DEVICE, Model=$MODEL, System=$SYS, Fullgraph=$FULLGRAPH_FLAG"
 
 # === 环境切换逻辑 ===
-# 注意：这里需要指向我们之前配好的 venv 的 activate 脚本
 if [[ "$SYS" == "our" ]]; then
     source ${PROJECT_DIR}/our_venv/bin/activate
 else
@@ -36,19 +46,24 @@ export HF_HOME="/data2/ldz/hf_cache"
 export CUDA_VISIBLE_DEVICES=2
 
 # === 执行命令 ===
+# 日志文件名中加入 fullgraph 标识
 if [[ "$EXP" == "kernel" ]]; then
     # 运行 Kernel 实验
-    # 注意：这里假设 run_kernel.py 已经在根目录 (根据之前的 setup)
-    #python run_kernel.py -m $MODEL -s $SYS --no-check 2>&1 | tee ${LOG_DIR}/kernel.${DEVICE}.${MODEL}.${SYS}.log
-    python run_kernel.py -m $MODEL -s $SYS --seqlen 2048 --no-check 2>&1 | tee ${LOG_DIR}/kernel.${DEVICE}.${MODEL}.${SYS}.log
+    CMD="python run_kernel.py -m $MODEL -s $SYS $FULLGRAPH_OPT --seqlen 2048 --no-check"
+    LOGFILE="${LOG_DIR}/kernel.${DEVICE}.${MODEL}.${SYS}.${FULLGRAPH_FLAG}.log"
+    echo "Executing: $CMD"
+    $CMD 2>&1 | tee $LOGFILE
+
 elif [[ "$EXP" == "e2e" ]]; then
     # 运行 E2E 实验
-    # -p amax 对应 weight_zoo.json 里的配置
-    python run_e2e.py -p amax -m $MODEL -s $SYS --seqlen 2048 2>&1 | tee ${LOG_DIR}/e2e.${DEVICE}.${MODEL}.${SYS}.log
+    CMD="python run_e2e.py -p amax -m $MODEL -s $SYS $FULLGRAPH_OPT --seqlen 2048"
+    LOGFILE="${LOG_DIR}/e2e.${DEVICE}.${MODEL}.${SYS}.${FULLGRAPH_FLAG}.log"
+    echo "Executing: $CMD"
+    $CMD 2>&1 | tee $LOGFILE
 
 else
     echo "Invalid experiment type: $EXP"
-    exit -1
+    exit 1
 fi
 
 # 退出环境，保持清洁

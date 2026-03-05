@@ -212,8 +212,16 @@ public:
           llvm_unreachable("not support reduce type");
         }
         auto name = get_name(name_tag);
-        indent() << name << " = " << callee << "(" << symbol_table.lookup(operand) << ", axis=" << dim
-                 << ", keep_dims=" << (keep_dim ? "True" : "False") << ").to(" << get_tl_dtype(elem_type) << ")\n";
+        indent() << name << " = ";
+        // Modify: use tl.expand_dims explicitly instead of keep_dim argument
+        if (keep_dim) {
+          indent(false) << "tl.expand_dims(";
+        }
+        indent(false) << callee << "(" << symbol_table.lookup(operand) << ", axis=" << dim << ")";
+        if (keep_dim) {
+          indent(false) << ", axis=" << dim << ")";
+        }
+        indent(false) << ".to(" << get_tl_dtype(elem_type) << ")\n";
         if (init != nullptr) {
           indent() << name << " " << inplace_op_str << " " << symbol_table.lookup(init) << "\n";
         }
@@ -226,10 +234,14 @@ public:
         auto rhs_type = cast<RankedTensorType>(rhs.getType());
         auto res_type = cast<RankedTensorType>(dot_op.getResult().getType());
         assert(lhs_type.getRank() == 2 && rhs_type.getRank() == 2);
+        
+        // --- Modified Start: Support F32 ---
         bool is_f16 = lhs_type.getElementType().isF16() && rhs_type.getElementType().isF16();
         bool is_bf16 = lhs_type.getElementType().isBF16() && rhs_type.getElementType().isBF16();
-        assert(is_f16 || is_bf16);
-        // FIXME: f32? verify
+        bool is_f32 = lhs_type.getElementType().isF32() && rhs_type.getElementType().isF32();
+        assert(is_f16 || is_bf16 || is_f32);
+        // --- Modified End ---
+
         assert(res_type.getRank() == 2 && res_type.getElementType().isF32());
         indent() << name << " = tl.dot(" << symbol_table.lookup(lhs) << ", " << symbol_table.lookup(rhs) << ")\n";
         symbol_table.insert(dot_op.getResult(), name);
@@ -349,30 +361,12 @@ public:
         indent() << name << " = " << func_str << "(" << symbol_table.lookup(op->getOperand(0)) << ")\n";
         symbol_table.insert(op->getResult(0), name);
       } else if (isa<TanhOp>(op)) {
-        // these ops are not supported by triton directly
+        // [Modified] Use standard tl.math.tanh instead of deprecated inline_asm
         auto operand = op->getOperand(0);
-        llvm::TypeSwitch<Operation *>(op)
-            .Case<TanhOp>([&](auto) {
-              auto name = get_name("tanh");
-              auto elem_type = cast<RankedTensorType>(operand.getType()).getElementType();
-              assert(elem_type.isF32());
-              indent() << name << " = tl.inline_asm_elementwise(" << "\n";
-              {
-                Indent tab(cur_level, os);
-                tab() << "asm=" << "'tanh.approx.f32 $0, $1;'," << "\n";
-                tab() << "constraints=('=r,r')," << "\n";
-                tab() << "args=[" << symbol_table.lookup(operand) << "]," << "\n";
-                tab() << "dtype=(" << get_tl_dtype(elem_type) << ",)," << "\n";
-                tab() << "is_pure=True," << "\n";
-                tab() << "pack=1," << "\n";
-              }
-              indent() << ")\n";
-              symbol_table.insert(op->getResult(0), name);
-            })
-            .Default([&](Operation *_op) {
-              _op->dump();
-              llvm_unreachable("unknown unary op that triton not supported yet");
-            });
+        auto name = get_name("tanh");
+        indent() << name << " = tl.math.tanh(" << symbol_table.lookup(operand) << ")\n";
+        symbol_table.insert(op->getResult(0), name);
+
       } else if (auto unsqueeze_op = dyn_cast<UnsqueezeOp>(op)) {
         auto operand = unsqueeze_op.getOperand();
         auto dim = unsqueeze_op.getDimAttr().getInt();
@@ -499,11 +493,13 @@ public:
     // autotune
     os << "@triton.autotune(configs=[" << "\n";
     SmallVector<int> num_warps;
+    // [Modified] Add 2 warps config for large head_dim (e.g. gemma2) to prevent OOM
+    num_warps.push_back(2);
     num_warps.push_back(4);
     num_warps.push_back(8);
     for (auto num_warp : num_warps) {
       Indent tab(cur_level, os);
-      tab() << "triton.Config({}, num_warps=" << num_warp << "),\n";
+      tab() << "triton.Config({}, num_warps=" << num_warp << ", num_stages=1),\n";//这里先显式指定流水线级数为1，防止超显存
     }
     os << "], key=['" << autotune_key_name << "'])\n";
 

@@ -24,7 +24,9 @@ def asuka_from_onnx(onnx_model, func_name):
   np_type_to_mlir = {
     np.float16: builder.get_f16_ty(),
     np.dtypes.Float16DType(): builder.get_f16_ty(),
+    np.dtype('float16'): builder.get_f16_ty(), 
     np.float32: builder.get_f32_ty(),
+    np.dtype('float32'): builder.get_f32_ty(),
   }
 
   graph = onnx_model.graph
