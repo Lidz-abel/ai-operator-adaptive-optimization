@@ -19,5 +19,3 @@ database_*.json
 
 # local outputs
 repro_logs/
-decode_experiments/
-dynamic_shape_eval/

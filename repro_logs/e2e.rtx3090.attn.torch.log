@@ -1,14 +1,0 @@
-model='attn' system='torch' seqlen=2048 layer_num=None
-input_names=['q', 'k', 'v']
-output_names=['out']
-weight_zoo_path='/data2/ldz/FlashTensor-AE/weight_zoo.json'
-hf_config.num_hidden_layers=32
-data_path='/data2/ldz/FlashTensor-AE/vcsum.jsonl'
-token_ids.shape=torch.Size([1, 2048])
-token_ids.grad=None
-using safe tensor: files={'model-00002-of-00002.safetensors', 'model-00001-of-00002.safetensors'}
-  0%|          | 0/2 [00:00<?, ?it/s]100%|██████████| 2/2 [00:00<00:00, 182.12it/s]
-  0%|          | 0/32 [00:00<?, ?it/s] 22%|██▏       | 7/32 [00:00<00:00, 66.94it/s] 44%|████▍     | 14/32 [00:00<00:00, 66.58it/s] 66%|██████▌   | 21/32 [00:00<00:00, 66.41it/s] 88%|████████▊ | 28/32 [00:00<00:00, 65.71it/s]100%|██████████| 32/32 [00:00<00:00, 65.69it/s]
-warmup start
-warmup done
-[torch] avg 620.4003 ms, min 615.3159 ms, max 624.5642 ms (50 runs, 50 warmups, profiled)

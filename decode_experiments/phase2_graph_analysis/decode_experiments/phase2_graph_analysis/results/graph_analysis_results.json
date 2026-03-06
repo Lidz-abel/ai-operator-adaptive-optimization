@@ -1,0 +1,256 @@
+{
+  "decode": {
+    "total_ops": 16,
+    "compute_ops": 2,
+    "memory_ops": 10,
+    "reduce_ops": 3,
+    "element_wise_ops": 2,
+    "kernel_boundaries": [
+      6,
+      10,
+      16
+    ],
+    "fragmentation_score": 0.1875,
+    "operators": [
+      {
+        "name": "transpose_q",
+        "op_type": "transpose",
+        "is_compute_intensive": false,
+        "is_memory_intensive": true,
+        "has_reduce": false
+      },
+      {
+        "name": "transpose_k",
+        "op_type": "transpose",
+        "is_compute_intensive": false,
+        "is_memory_intensive": true,
+        "has_reduce": false
+      },
+      {
+        "name": "transpose_v",
+        "op_type": "transpose",
+        "is_compute_intensive": false,
+        "is_memory_intensive": true,
+        "has_reduce": false
+      },
+      {
+        "name": "matmul_qk",
+        "op_type": "matmul",
+        "is_compute_intensive": true,
+        "is_memory_intensive": false,
+        "has_reduce": false
+      },
+      {
+        "name": "div_scale",
+        "op_type": "div",
+        "is_compute_intensive": false,
+        "is_memory_intensive": false,
+        "has_reduce": false
+      },
+      {
+        "name": "add_mask",
+        "op_type": "add",
+        "is_compute_intensive": false,
+        "is_memory_intensive": false,
+        "has_reduce": false
+      },
+      {
+        "name": "softmax",
+        "op_type": "softmax",
+        "is_compute_intensive": false,
+        "is_memory_intensive": false,
+        "has_reduce": true
+      },
+      {
+        "name": "matmul_pv",
+        "op_type": "matmul",
+        "is_compute_intensive": true,
+        "is_memory_intensive": false,
+        "has_reduce": false
+      },
+      {
+        "name": "transpose_out",
+        "op_type": "transpose",
+        "is_compute_intensive": false,
+        "is_memory_intensive": true,
+        "has_reduce": false
+      },
+      {
+        "name": "contiguous",
+        "op_type": "contiguous",
+        "is_compute_intensive": false,
+        "is_memory_intensive": true,
+        "has_reduce": false
+      },
+      {
+        "name": "sum_h2o_score",
+        "op_type": "sum",
+        "is_compute_intensive": false,
+        "is_memory_intensive": false,
+        "has_reduce": true
+      },
+      {
+        "name": "topk_selection",
+        "op_type": "topk",
+        "is_compute_intensive": false,
+        "is_memory_intensive": true,
+        "has_reduce": true
+      },
+      {
+        "name": "gather_k",
+        "op_type": "gather",
+        "is_compute_intensive": false,
+        "is_memory_intensive": true,
+        "has_reduce": false
+      },
+      {
+        "name": "gather_v",
+        "op_type": "gather",
+        "is_compute_intensive": false,
+        "is_memory_intensive": true,
+        "has_reduce": false
+      },
+      {
+        "name": "view_out",
+        "op_type": "view",
+        "is_compute_intensive": false,
+        "is_memory_intensive": true,
+        "has_reduce": false
+      },
+      {
+        "name": "view_h2o",
+        "op_type": "view",
+        "is_compute_intensive": false,
+        "is_memory_intensive": true,
+        "has_reduce": false
+      }
+    ]
+  },
+  "prefill": {
+    "total_ops": 16,
+    "compute_ops": 2,
+    "memory_ops": 10,
+    "reduce_ops": 3,
+    "element_wise_ops": 2,
+    "kernel_boundaries": [
+      6,
+      10,
+      16
+    ],
+    "fragmentation_score": 0.1875,
+    "operators": [
+      {
+        "name": "transpose_q",
+        "op_type": "transpose",
+        "is_compute_intensive": false,
+        "is_memory_intensive": true,
+        "has_reduce": false
+      },
+      {
+        "name": "transpose_k",
+        "op_type": "transpose",
+        "is_compute_intensive": false,
+        "is_memory_intensive": true,
+        "has_reduce": false
+      },
+      {
+        "name": "transpose_v",
+        "op_type": "transpose",
+        "is_compute_intensive": false,
+        "is_memory_intensive": true,
+        "has_reduce": false
+      },
+      {
+        "name": "matmul_qk",
+        "op_type": "matmul",
+        "is_compute_intensive": true,
+        "is_memory_intensive": false,
+        "has_reduce": false
+      },
+      {
+        "name": "div_scale",
+        "op_type": "div",
+        "is_compute_intensive": false,
+        "is_memory_intensive": false,
+        "has_reduce": false
+      },
+      {
+        "name": "add_mask",
+        "op_type": "add",
+        "is_compute_intensive": false,
+        "is_memory_intensive": false,
+        "has_reduce": false
+      },
+      {
+        "name": "softmax",
+        "op_type": "softmax",
+        "is_compute_intensive": false,
+        "is_memory_intensive": false,
+        "has_reduce": true
+      },
+      {
+        "name": "matmul_pv",
+        "op_type": "matmul",
+        "is_compute_intensive": true,
+        "is_memory_intensive": false,
+        "has_reduce": false
+      },
+      {
+        "name": "transpose_out",
+        "op_type": "transpose",
+        "is_compute_intensive": false,
+        "is_memory_intensive": true,
+        "has_reduce": false
+      },
+      {
+        "name": "contiguous",
+        "op_type": "contiguous",
+        "is_compute_intensive": false,
+        "is_memory_intensive": true,
+        "has_reduce": false
+      },
+      {
+        "name": "sum_h2o_score",
+        "op_type": "sum",
+        "is_compute_intensive": false,
+        "is_memory_intensive": false,
+        "has_reduce": true
+      },
+      {
+        "name": "topk_selection",
+        "op_type": "topk",
+        "is_compute_intensive": false,
+        "is_memory_intensive": true,
+        "has_reduce": true
+      },
+      {
+        "name": "gather_k",
+        "op_type": "gather",
+        "is_compute_intensive": false,
+        "is_memory_intensive": true,
+        "has_reduce": false
+      },
+      {
+        "name": "gather_v",
+        "op_type": "gather",
+        "is_compute_intensive": false,
+        "is_memory_intensive": true,
+        "has_reduce": false
+      },
+      {
+        "name": "view_out",
+        "op_type": "view",
+        "is_compute_intensive": false,
+        "is_memory_intensive": true,
+        "has_reduce": false
+      },
+      {
+        "name": "view_h2o",
+        "op_type": "view",
+        "is_compute_intensive": false,
+        "is_memory_intensive": true,
+        "has_reduce": false
+      }
+    ]
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "2048": {
+    "baseline": {
+      "implementation": "baseline",
+      "batch_size": 1,
+      "num_heads": 32,
+      "head_dim": 128,
+      "kv_len": 2048,
+      "gpu_time_ms": 0.12505087852478028,
+      "cpu_time_ms": 0.12207984924316406,
+      "tflops": 0.2714706877750793,
+      "bandwidth_utilization_pct": 28.793312788406787,
+      "speedup": null
+    },
+    "fused": {
+      "implementation": "fused",
+      "batch_size": 1,
+      "num_heads": 32,
+      "head_dim": 128,
+      "kv_len": 2048,
+      "gpu_time_ms": 0.1620889663696289,
+      "cpu_time_ms": 0.159454345703125,
+      "tflops": 0.20943836437691588,
+      "bandwidth_utilization_pct": 22.21390598307696,
+      "speedup": 0.7714953172050792
+    },
+    "speedup": 0.7714953172050792
+  },
+  "4096": {
+    "baseline": {
+      "implementation": "baseline",
+      "batch_size": 1,
+      "num_heads": 32,
+      "head_dim": 128,
+      "kv_len": 4096,
+      "gpu_time_ms": 0.12323840141296387,
+      "cpu_time_ms": 0.12418031692504883,
+      "tflops": 0.550926458162073,
+      "bandwidth_utilization_pct": 58.4193531380094,
+      "speedup": null
+    },
+    "fused": {
+      "implementation": "fused",
+      "batch_size": 1,
+      "num_heads": 32,
+      "head_dim": 128,
+      "kv_len": 4096,
+      "gpu_time_ms": 0.31044607162475585,
+      "cpu_time_ms": 0.3099370002746582,
+      "tflops": 0.21870238410382203,
+      "bandwidth_utilization_pct": 23.19084810649472,
+      "speedup": 0.3969720111708332
+    },
+    "speedup": 0.3969720111708332
+  },
+  "8192": {
+    "baseline": {
+      "implementation": "baseline",
+      "batch_size": 1,
+      "num_heads": 32,
+      "head_dim": 128,
+      "kv_len": 8192,
+      "gpu_time_ms": 0.18024448394775391,
+      "cpu_time_ms": 0.1808333396911621,
+      "tflops": 0.7533689188478055,
+      "bandwidth_utilization_pct": 79.87631378188628,
+      "speedup": null
+    },
+    "fused": {
+      "implementation": "fused",
+      "batch_size": 1,
+      "num_heads": 32,
+      "head_dim": 128,
+      "kv_len": 8192,
+      "gpu_time_ms": 0.571596794128418,
+      "cpu_time_ms": 0.5664443969726562,
+      "tflops": 0.23756359971727298,
+      "bandwidth_utilization_pct": 25.187798646103655,
+      "speedup": 0.31533501552015214
+    },
+    "speedup": 0.31533501552015214
+  }
+}

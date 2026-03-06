@@ -1,0 +1,14 @@
+{
+    "metadata": {
+        "timestamp": "2026-03-03 21:12:17",
+        "model": "attn",
+        "base_seqlen": 1024,
+        "target_seqlen": 2048
+    },
+    "metrics": {
+        "crash_error": "RuntimeError: The size of tensor a (2048) must match the size of tensor b (1024) at non-singleton dimension 1"
+    },
+    "conclusions": {
+        "hard_crash": true
+    }
+}
