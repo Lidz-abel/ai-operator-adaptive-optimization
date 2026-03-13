@@ -1,0 +1,1831 @@
+{
+  "analysis_version": "phase2_v2_strict_fair",
+  "generated_at": "2026-03-06T22:42:20",
+  "methodology": {
+    "fairness_rules": [
+      "prefill/decode use identical operator schema within each scope",
+      "no hardcoded launch-overhead or latency-based speedup claims",
+      "all metrics are produced by transparent formulas in this script",
+      "kernel boundaries are computed by explicit policy functions"
+    ],
+    "notes": [
+      "FLOPs/bytes for topk/sort are heuristic proxies, flagged as such in op notes.",
+      "This phase is graph-cost analysis, not kernel microbenchmark."
+    ]
+  },
+  "config": {
+    "scope": "both",
+    "prefill": {
+      "batch_size": 1,
+      "q_len": 4096,
+      "kv_len": 4096,
+      "head_num": 32,
+      "kv_head_num": 32,
+      "head_dim": 128,
+      "cache_budget": 512,
+      "dtype": "float16",
+      "compute_intensity_threshold": 8.0
+    },
+    "decode": {
+      "batch_size": 1,
+      "q_len": 1,
+      "kv_len": 4096,
+      "head_num": 32,
+      "kv_head_num": 32,
+      "head_dim": 128,
+      "cache_budget": 512,
+      "dtype": "float16",
+      "compute_intensity_threshold": 8.0
+    }
+  },
+  "scopes": {
+    "attention_only": {
+      "prefill": {
+        "scope": "attention_only",
+        "shape": {
+          "batch_size": 1,
+          "q_len": 4096,
+          "kv_len": 4096,
+          "head_num": 32,
+          "kv_head_num": 32,
+          "head_dim": 128,
+          "cache_budget": 512,
+          "dtype": "float16",
+          "compute_intensity_threshold": 8.0
+        },
+        "summary": {
+          "total_ops": 17,
+          "reduce_ops": 2,
+          "dynamic_shape_ops": 0,
+          "irregular_access_ops": 0,
+          "estimated_total_flops": 279189520384.0,
+          "estimated_total_read_bytes": 11072962560.0,
+          "estimated_total_write_bytes": 8858894336.0,
+          "estimated_total_rw_bytes": 19931856896.0,
+          "global_arithmetic_intensity": 14.007200725991003,
+          "compute_intensity_threshold": 8.0
+        },
+        "kernel_policies": {
+          "reduce_barrier": {
+            "kernel_count": 5,
+            "covered_ops": 17,
+            "coverage_ok": true,
+            "kernels": [
+              [
+                "make_mask",
+                "causal_triu",
+                "transpose_q",
+                "transpose_k",
+                "transpose_v",
+                "matmul_qk",
+                "div_scale",
+                "add_mask",
+                "cast_scores_fp32"
+              ],
+              [
+                "softmax"
+              ],
+              [
+                "cast_probs",
+                "matmul_pv",
+                "transpose_out",
+                "contiguous_out"
+              ],
+              [
+                "sum_h2o_score"
+              ],
+              [
+                "view_out",
+                "view_h2o"
+              ]
+            ]
+          },
+          "reduce_or_irregular_barrier": {
+            "kernel_count": 5,
+            "covered_ops": 17,
+            "coverage_ok": true,
+            "kernels": [
+              [
+                "make_mask",
+                "causal_triu",
+                "transpose_q",
+                "transpose_k",
+                "transpose_v",
+                "matmul_qk",
+                "div_scale",
+                "add_mask",
+                "cast_scores_fp32"
+              ],
+              [
+                "softmax"
+              ],
+              [
+                "cast_probs",
+                "matmul_pv",
+                "transpose_out",
+                "contiguous_out"
+              ],
+              [
+                "sum_h2o_score"
+              ],
+              [
+                "view_out",
+                "view_h2o"
+              ]
+            ]
+          },
+          "strict_decode_barrier": {
+            "kernel_count": 5,
+            "covered_ops": 17,
+            "coverage_ok": true,
+            "kernels": [
+              [
+                "make_mask",
+                "causal_triu",
+                "transpose_q",
+                "transpose_k",
+                "transpose_v",
+                "matmul_qk",
+                "div_scale",
+                "add_mask",
+                "cast_scores_fp32"
+              ],
+              [
+                "softmax"
+              ],
+              [
+                "cast_probs",
+                "matmul_pv",
+                "transpose_out",
+                "contiguous_out"
+              ],
+              [
+                "sum_h2o_score"
+              ],
+              [
+                "view_out",
+                "view_h2o"
+              ]
+            ]
+          }
+        },
+        "operators": [
+          {
+            "name": "make_mask",
+            "op_type": "mask_create",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 0.0,
+            "estimated_write_bytes": 33554432,
+            "estimated_total_bytes": 33554432.0,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "causal_triu",
+            "op_type": "triu",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 16777216.0,
+            "estimated_read_bytes": 33554432,
+            "estimated_write_bytes": 33554432,
+            "estimated_total_bytes": 67108864,
+            "arithmetic_intensity": 0.25,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "transpose_q",
+            "op_type": "transpose_q",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 33554432,
+            "estimated_write_bytes": 33554432,
+            "estimated_total_bytes": 67108864,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "transpose_k",
+            "op_type": "transpose_k",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 33554432,
+            "estimated_write_bytes": 33554432,
+            "estimated_total_bytes": 67108864,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "transpose_v",
+            "op_type": "transpose_v",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 33554432,
+            "estimated_write_bytes": 33554432,
+            "estimated_total_bytes": 67108864,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "matmul_qk",
+            "op_type": "matmul_qk",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 137438953472.0,
+            "estimated_read_bytes": 67108864,
+            "estimated_write_bytes": 1073741824,
+            "estimated_total_bytes": 1140850688,
+            "arithmetic_intensity": 120.47058823529412,
+            "intensity_label": "compute-leaning",
+            "note": ""
+          },
+          {
+            "name": "div_scale",
+            "op_type": "div_scale",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 536870912.0,
+            "estimated_read_bytes": 1073741824,
+            "estimated_write_bytes": 1073741824,
+            "estimated_total_bytes": 2147483648,
+            "arithmetic_intensity": 0.25,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "add_mask",
+            "op_type": "add_mask",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 536870912.0,
+            "estimated_read_bytes": 1107296256,
+            "estimated_write_bytes": 1073741824,
+            "estimated_total_bytes": 2181038080,
+            "arithmetic_intensity": 0.24615384615384617,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "cast_scores_fp32",
+            "op_type": "cast_scores_fp32",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 1073741824,
+            "estimated_write_bytes": 2147483648,
+            "estimated_total_bytes": 3221225472,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "softmax",
+            "op_type": "softmax",
+            "has_reduce": true,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 2684354560.0,
+            "estimated_read_bytes": 2147483648,
+            "estimated_write_bytes": 2147483648,
+            "estimated_total_bytes": 4294967296,
+            "arithmetic_intensity": 0.625,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "cast_probs",
+            "op_type": "cast_probs",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 2147483648,
+            "estimated_write_bytes": 1073741824,
+            "estimated_total_bytes": 3221225472,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "matmul_pv",
+            "op_type": "matmul_pv",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 137438953472.0,
+            "estimated_read_bytes": 1107296256,
+            "estimated_write_bytes": 33554432,
+            "estimated_total_bytes": 1140850688,
+            "arithmetic_intensity": 120.47058823529412,
+            "intensity_label": "compute-leaning",
+            "note": ""
+          },
+          {
+            "name": "transpose_out",
+            "op_type": "transpose_out",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 33554432,
+            "estimated_write_bytes": 33554432,
+            "estimated_total_bytes": 67108864,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "contiguous_out",
+            "op_type": "contiguous_out",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 33554432,
+            "estimated_write_bytes": 33554432,
+            "estimated_total_bytes": 67108864,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "sum_h2o_score",
+            "op_type": "sum_h2o_score",
+            "has_reduce": true,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 536739840.0,
+            "estimated_read_bytes": 2147483648,
+            "estimated_write_bytes": 524288,
+            "estimated_total_bytes": 2148007936,
+            "arithmetic_intensity": 0.2498779594825482,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "view_out",
+            "op_type": "view_out",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 0.0,
+            "estimated_write_bytes": 0.0,
+            "estimated_total_bytes": 0.0,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "meta",
+            "note": ""
+          },
+          {
+            "name": "view_h2o",
+            "op_type": "view_h2o",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 0.0,
+            "estimated_write_bytes": 0.0,
+            "estimated_total_bytes": 0.0,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "meta",
+            "note": ""
+          }
+        ]
+      },
+      "decode": {
+        "scope": "attention_only",
+        "shape": {
+          "batch_size": 1,
+          "q_len": 1,
+          "kv_len": 4096,
+          "head_num": 32,
+          "kv_head_num": 32,
+          "head_dim": 128,
+          "cache_budget": 512,
+          "dtype": "float16",
+          "compute_intensity_threshold": 8.0
+        },
+        "summary": {
+          "total_ops": 17,
+          "reduce_ops": 2,
+          "dynamic_shape_ops": 0,
+          "irregular_access_ops": 0,
+          "estimated_total_flops": 68030464.0,
+          "estimated_total_read_bytes": 136888320.0,
+          "estimated_total_write_bytes": 69779456.0,
+          "estimated_total_rw_bytes": 206667776.0,
+          "global_arithmetic_intensity": 0.32917789757412397,
+          "compute_intensity_threshold": 8.0
+        },
+        "kernel_policies": {
+          "reduce_barrier": {
+            "kernel_count": 5,
+            "covered_ops": 17,
+            "coverage_ok": true,
+            "kernels": [
+              [
+                "make_mask",
+                "causal_triu",
+                "transpose_q",
+                "transpose_k",
+                "transpose_v",
+                "matmul_qk",
+                "div_scale",
+                "add_mask",
+                "cast_scores_fp32"
+              ],
+              [
+                "softmax"
+              ],
+              [
+                "cast_probs",
+                "matmul_pv",
+                "transpose_out",
+                "contiguous_out"
+              ],
+              [
+                "sum_h2o_score"
+              ],
+              [
+                "view_out",
+                "view_h2o"
+              ]
+            ]
+          },
+          "reduce_or_irregular_barrier": {
+            "kernel_count": 5,
+            "covered_ops": 17,
+            "coverage_ok": true,
+            "kernels": [
+              [
+                "make_mask",
+                "causal_triu",
+                "transpose_q",
+                "transpose_k",
+                "transpose_v",
+                "matmul_qk",
+                "div_scale",
+                "add_mask",
+                "cast_scores_fp32"
+              ],
+              [
+                "softmax"
+              ],
+              [
+                "cast_probs",
+                "matmul_pv",
+                "transpose_out",
+                "contiguous_out"
+              ],
+              [
+                "sum_h2o_score"
+              ],
+              [
+                "view_out",
+                "view_h2o"
+              ]
+            ]
+          },
+          "strict_decode_barrier": {
+            "kernel_count": 5,
+            "covered_ops": 17,
+            "coverage_ok": true,
+            "kernels": [
+              [
+                "make_mask",
+                "causal_triu",
+                "transpose_q",
+                "transpose_k",
+                "transpose_v",
+                "matmul_qk",
+                "div_scale",
+                "add_mask",
+                "cast_scores_fp32"
+              ],
+              [
+                "softmax"
+              ],
+              [
+                "cast_probs",
+                "matmul_pv",
+                "transpose_out",
+                "contiguous_out"
+              ],
+              [
+                "sum_h2o_score"
+              ],
+              [
+                "view_out",
+                "view_h2o"
+              ]
+            ]
+          }
+        },
+        "operators": [
+          {
+            "name": "make_mask",
+            "op_type": "mask_create",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 0.0,
+            "estimated_write_bytes": 8192,
+            "estimated_total_bytes": 8192.0,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "causal_triu",
+            "op_type": "triu",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 4096.0,
+            "estimated_read_bytes": 8192,
+            "estimated_write_bytes": 8192,
+            "estimated_total_bytes": 16384,
+            "arithmetic_intensity": 0.25,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "transpose_q",
+            "op_type": "transpose_q",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 8192,
+            "estimated_write_bytes": 8192,
+            "estimated_total_bytes": 16384,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "transpose_k",
+            "op_type": "transpose_k",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 33554432,
+            "estimated_write_bytes": 33554432,
+            "estimated_total_bytes": 67108864,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "transpose_v",
+            "op_type": "transpose_v",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 33554432,
+            "estimated_write_bytes": 33554432,
+            "estimated_total_bytes": 67108864,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "matmul_qk",
+            "op_type": "matmul_qk",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 33554432.0,
+            "estimated_read_bytes": 33562624,
+            "estimated_write_bytes": 262144,
+            "estimated_total_bytes": 33824768,
+            "arithmetic_intensity": 0.9920077500605473,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "div_scale",
+            "op_type": "div_scale",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 131072.0,
+            "estimated_read_bytes": 262144,
+            "estimated_write_bytes": 262144,
+            "estimated_total_bytes": 524288,
+            "arithmetic_intensity": 0.25,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "add_mask",
+            "op_type": "add_mask",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 131072.0,
+            "estimated_read_bytes": 270336,
+            "estimated_write_bytes": 262144,
+            "estimated_total_bytes": 532480,
+            "arithmetic_intensity": 0.24615384615384617,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "cast_scores_fp32",
+            "op_type": "cast_scores_fp32",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 262144,
+            "estimated_write_bytes": 524288,
+            "estimated_total_bytes": 786432,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "softmax",
+            "op_type": "softmax",
+            "has_reduce": true,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 655360.0,
+            "estimated_read_bytes": 524288,
+            "estimated_write_bytes": 524288,
+            "estimated_total_bytes": 1048576,
+            "arithmetic_intensity": 0.625,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "cast_probs",
+            "op_type": "cast_probs",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 524288,
+            "estimated_write_bytes": 262144,
+            "estimated_total_bytes": 786432,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "matmul_pv",
+            "op_type": "matmul_pv",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 33554432.0,
+            "estimated_read_bytes": 33816576,
+            "estimated_write_bytes": 8192,
+            "estimated_total_bytes": 33824768,
+            "arithmetic_intensity": 0.9920077500605473,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "transpose_out",
+            "op_type": "transpose_out",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 8192,
+            "estimated_write_bytes": 8192,
+            "estimated_total_bytes": 16384,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "contiguous_out",
+            "op_type": "contiguous_out",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 8192,
+            "estimated_write_bytes": 8192,
+            "estimated_total_bytes": 16384,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "sum_h2o_score",
+            "op_type": "sum_h2o_score",
+            "has_reduce": true,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 524288,
+            "estimated_write_bytes": 524288,
+            "estimated_total_bytes": 1048576,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "view_out",
+            "op_type": "view_out",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 0.0,
+            "estimated_write_bytes": 0.0,
+            "estimated_total_bytes": 0.0,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "meta",
+            "note": ""
+          },
+          {
+            "name": "view_h2o",
+            "op_type": "view_h2o",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 0.0,
+            "estimated_write_bytes": 0.0,
+            "estimated_total_bytes": 0.0,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "meta",
+            "note": ""
+          }
+        ]
+      },
+      "comparison": {
+        "prefill_vs_decode_flops_ratio": 4103.889698356313,
+        "prefill_vs_decode_rw_bytes_ratio": 96.44395116537181,
+        "prefill_vs_decode_global_ai_ratio": 42.552069349786386
+      }
+    },
+    "attention_plus_cache": {
+      "prefill": {
+        "scope": "attention_plus_cache",
+        "shape": {
+          "batch_size": 1,
+          "q_len": 4096,
+          "kv_len": 4096,
+          "head_num": 32,
+          "kv_head_num": 32,
+          "head_dim": 128,
+          "cache_budget": 512,
+          "dtype": "float16",
+          "compute_intensity_threshold": 8.0
+        },
+        "summary": {
+          "total_ops": 24,
+          "reduce_ops": 3,
+          "dynamic_shape_ops": 1,
+          "irregular_access_ops": 4,
+          "estimated_total_flops": 279190847488.0,
+          "estimated_total_read_bytes": 11123949568.0,
+          "estimated_total_write_bytes": 8875933696.0,
+          "estimated_total_rw_bytes": 19999883264.0,
+          "global_arithmetic_intensity": 13.959623853932511,
+          "compute_intensity_threshold": 8.0
+        },
+        "kernel_policies": {
+          "reduce_barrier": {
+            "kernel_count": 7,
+            "covered_ops": 24,
+            "coverage_ok": true,
+            "kernels": [
+              [
+                "make_mask",
+                "causal_triu",
+                "transpose_q",
+                "transpose_k",
+                "transpose_v",
+                "matmul_qk",
+                "div_scale",
+                "add_mask",
+                "cast_scores_fp32"
+              ],
+              [
+                "softmax"
+              ],
+              [
+                "cast_probs",
+                "matmul_pv",
+                "transpose_out",
+                "contiguous_out"
+              ],
+              [
+                "sum_h2o_score"
+              ],
+              [
+                "view_out",
+                "view_h2o"
+              ],
+              [
+                "topk_selection"
+              ],
+              [
+                "sort_selected",
+                "expand_selected",
+                "gather_k",
+                "gather_v",
+                "concat_kv_cache",
+                "view_kv_cache"
+              ]
+            ]
+          },
+          "reduce_or_irregular_barrier": {
+            "kernel_count": 11,
+            "covered_ops": 24,
+            "coverage_ok": true,
+            "kernels": [
+              [
+                "make_mask",
+                "causal_triu",
+                "transpose_q",
+                "transpose_k",
+                "transpose_v",
+                "matmul_qk",
+                "div_scale",
+                "add_mask",
+                "cast_scores_fp32"
+              ],
+              [
+                "softmax"
+              ],
+              [
+                "cast_probs",
+                "matmul_pv",
+                "transpose_out",
+                "contiguous_out"
+              ],
+              [
+                "sum_h2o_score"
+              ],
+              [
+                "view_out",
+                "view_h2o"
+              ],
+              [
+                "topk_selection"
+              ],
+              [
+                "sort_selected"
+              ],
+              [
+                "expand_selected"
+              ],
+              [
+                "gather_k"
+              ],
+              [
+                "gather_v"
+              ],
+              [
+                "concat_kv_cache",
+                "view_kv_cache"
+              ]
+            ]
+          },
+          "strict_decode_barrier": {
+            "kernel_count": 11,
+            "covered_ops": 24,
+            "coverage_ok": true,
+            "kernels": [
+              [
+                "make_mask",
+                "causal_triu",
+                "transpose_q",
+                "transpose_k",
+                "transpose_v",
+                "matmul_qk",
+                "div_scale",
+                "add_mask",
+                "cast_scores_fp32"
+              ],
+              [
+                "softmax"
+              ],
+              [
+                "cast_probs",
+                "matmul_pv",
+                "transpose_out",
+                "contiguous_out"
+              ],
+              [
+                "sum_h2o_score"
+              ],
+              [
+                "view_out",
+                "view_h2o"
+              ],
+              [
+                "topk_selection"
+              ],
+              [
+                "sort_selected"
+              ],
+              [
+                "expand_selected"
+              ],
+              [
+                "gather_k"
+              ],
+              [
+                "gather_v"
+              ],
+              [
+                "concat_kv_cache",
+                "view_kv_cache"
+              ]
+            ]
+          }
+        },
+        "operators": [
+          {
+            "name": "make_mask",
+            "op_type": "mask_create",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 0.0,
+            "estimated_write_bytes": 33554432,
+            "estimated_total_bytes": 33554432.0,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "causal_triu",
+            "op_type": "triu",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 16777216.0,
+            "estimated_read_bytes": 33554432,
+            "estimated_write_bytes": 33554432,
+            "estimated_total_bytes": 67108864,
+            "arithmetic_intensity": 0.25,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "transpose_q",
+            "op_type": "transpose_q",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 33554432,
+            "estimated_write_bytes": 33554432,
+            "estimated_total_bytes": 67108864,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "transpose_k",
+            "op_type": "transpose_k",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 33554432,
+            "estimated_write_bytes": 33554432,
+            "estimated_total_bytes": 67108864,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "transpose_v",
+            "op_type": "transpose_v",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 33554432,
+            "estimated_write_bytes": 33554432,
+            "estimated_total_bytes": 67108864,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "matmul_qk",
+            "op_type": "matmul_qk",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 137438953472.0,
+            "estimated_read_bytes": 67108864,
+            "estimated_write_bytes": 1073741824,
+            "estimated_total_bytes": 1140850688,
+            "arithmetic_intensity": 120.47058823529412,
+            "intensity_label": "compute-leaning",
+            "note": ""
+          },
+          {
+            "name": "div_scale",
+            "op_type": "div_scale",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 536870912.0,
+            "estimated_read_bytes": 1073741824,
+            "estimated_write_bytes": 1073741824,
+            "estimated_total_bytes": 2147483648,
+            "arithmetic_intensity": 0.25,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "add_mask",
+            "op_type": "add_mask",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 536870912.0,
+            "estimated_read_bytes": 1107296256,
+            "estimated_write_bytes": 1073741824,
+            "estimated_total_bytes": 2181038080,
+            "arithmetic_intensity": 0.24615384615384617,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "cast_scores_fp32",
+            "op_type": "cast_scores_fp32",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 1073741824,
+            "estimated_write_bytes": 2147483648,
+            "estimated_total_bytes": 3221225472,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "softmax",
+            "op_type": "softmax",
+            "has_reduce": true,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 2684354560.0,
+            "estimated_read_bytes": 2147483648,
+            "estimated_write_bytes": 2147483648,
+            "estimated_total_bytes": 4294967296,
+            "arithmetic_intensity": 0.625,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "cast_probs",
+            "op_type": "cast_probs",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 2147483648,
+            "estimated_write_bytes": 1073741824,
+            "estimated_total_bytes": 3221225472,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "matmul_pv",
+            "op_type": "matmul_pv",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 137438953472.0,
+            "estimated_read_bytes": 1107296256,
+            "estimated_write_bytes": 33554432,
+            "estimated_total_bytes": 1140850688,
+            "arithmetic_intensity": 120.47058823529412,
+            "intensity_label": "compute-leaning",
+            "note": ""
+          },
+          {
+            "name": "transpose_out",
+            "op_type": "transpose_out",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 33554432,
+            "estimated_write_bytes": 33554432,
+            "estimated_total_bytes": 67108864,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "contiguous_out",
+            "op_type": "contiguous_out",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 33554432,
+            "estimated_write_bytes": 33554432,
+            "estimated_total_bytes": 67108864,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "sum_h2o_score",
+            "op_type": "sum_h2o_score",
+            "has_reduce": true,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 536739840.0,
+            "estimated_read_bytes": 2147483648,
+            "estimated_write_bytes": 524288,
+            "estimated_total_bytes": 2148007936,
+            "arithmetic_intensity": 0.2498779594825482,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "view_out",
+            "op_type": "view_out",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 0.0,
+            "estimated_write_bytes": 0.0,
+            "estimated_total_bytes": 0.0,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "meta",
+            "note": ""
+          },
+          {
+            "name": "view_h2o",
+            "op_type": "view_h2o",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 0.0,
+            "estimated_write_bytes": 0.0,
+            "estimated_total_bytes": 0.0,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "meta",
+            "note": ""
+          },
+          {
+            "name": "topk_selection",
+            "op_type": "topk_selection",
+            "has_reduce": true,
+            "has_dynamic_shape": true,
+            "has_irregular_access": true,
+            "estimated_flops": 1179648.0,
+            "estimated_read_bytes": 524288,
+            "estimated_write_bytes": 131072,
+            "estimated_total_bytes": 655360,
+            "arithmetic_intensity": 1.8,
+            "intensity_label": "memory-leaning",
+            "note": "k is runtime configurable; selection is data-dependent"
+          },
+          {
+            "name": "sort_selected",
+            "op_type": "sort_selected",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": true,
+            "estimated_flops": 147456.0,
+            "estimated_read_bytes": 131072,
+            "estimated_write_bytes": 131072,
+            "estimated_total_bytes": 262144,
+            "arithmetic_intensity": 0.5625,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "expand_selected",
+            "op_type": "expand_selected",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 0.0,
+            "estimated_write_bytes": 0.0,
+            "estimated_total_bytes": 0.0,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "meta",
+            "note": ""
+          },
+          {
+            "name": "gather_k",
+            "op_type": "gather_k",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": true,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 20971520,
+            "estimated_write_bytes": 4194304,
+            "estimated_total_bytes": 25165824,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "gather_v",
+            "op_type": "gather_v",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": true,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 20971520,
+            "estimated_write_bytes": 4194304,
+            "estimated_total_bytes": 25165824,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "concat_kv_cache",
+            "op_type": "concat_kv_cache",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 8388608,
+            "estimated_write_bytes": 8388608,
+            "estimated_total_bytes": 16777216,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "view_kv_cache",
+            "op_type": "view_kv_cache",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 0.0,
+            "estimated_write_bytes": 0.0,
+            "estimated_total_bytes": 0.0,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "meta",
+            "note": ""
+          }
+        ]
+      },
+      "decode": {
+        "scope": "attention_plus_cache",
+        "shape": {
+          "batch_size": 1,
+          "q_len": 1,
+          "kv_len": 4096,
+          "head_num": 32,
+          "kv_head_num": 32,
+          "head_dim": 128,
+          "cache_budget": 512,
+          "dtype": "float16",
+          "compute_intensity_threshold": 8.0
+        },
+        "summary": {
+          "total_ops": 24,
+          "reduce_ops": 3,
+          "dynamic_shape_ops": 1,
+          "irregular_access_ops": 4,
+          "estimated_total_flops": 69357568.0,
+          "estimated_total_read_bytes": 187875328.0,
+          "estimated_total_write_bytes": 86818816.0,
+          "estimated_total_rw_bytes": 274694144.0,
+          "global_arithmetic_intensity": 0.25249015865441965,
+          "compute_intensity_threshold": 8.0
+        },
+        "kernel_policies": {
+          "reduce_barrier": {
+            "kernel_count": 7,
+            "covered_ops": 24,
+            "coverage_ok": true,
+            "kernels": [
+              [
+                "make_mask",
+                "causal_triu",
+                "transpose_q",
+                "transpose_k",
+                "transpose_v",
+                "matmul_qk",
+                "div_scale",
+                "add_mask",
+                "cast_scores_fp32"
+              ],
+              [
+                "softmax"
+              ],
+              [
+                "cast_probs",
+                "matmul_pv",
+                "transpose_out",
+                "contiguous_out"
+              ],
+              [
+                "sum_h2o_score"
+              ],
+              [
+                "view_out",
+                "view_h2o"
+              ],
+              [
+                "topk_selection"
+              ],
+              [
+                "sort_selected",
+                "expand_selected",
+                "gather_k",
+                "gather_v",
+                "concat_kv_cache",
+                "view_kv_cache"
+              ]
+            ]
+          },
+          "reduce_or_irregular_barrier": {
+            "kernel_count": 11,
+            "covered_ops": 24,
+            "coverage_ok": true,
+            "kernels": [
+              [
+                "make_mask",
+                "causal_triu",
+                "transpose_q",
+                "transpose_k",
+                "transpose_v",
+                "matmul_qk",
+                "div_scale",
+                "add_mask",
+                "cast_scores_fp32"
+              ],
+              [
+                "softmax"
+              ],
+              [
+                "cast_probs",
+                "matmul_pv",
+                "transpose_out",
+                "contiguous_out"
+              ],
+              [
+                "sum_h2o_score"
+              ],
+              [
+                "view_out",
+                "view_h2o"
+              ],
+              [
+                "topk_selection"
+              ],
+              [
+                "sort_selected"
+              ],
+              [
+                "expand_selected"
+              ],
+              [
+                "gather_k"
+              ],
+              [
+                "gather_v"
+              ],
+              [
+                "concat_kv_cache",
+                "view_kv_cache"
+              ]
+            ]
+          },
+          "strict_decode_barrier": {
+            "kernel_count": 11,
+            "covered_ops": 24,
+            "coverage_ok": true,
+            "kernels": [
+              [
+                "make_mask",
+                "causal_triu",
+                "transpose_q",
+                "transpose_k",
+                "transpose_v",
+                "matmul_qk",
+                "div_scale",
+                "add_mask",
+                "cast_scores_fp32"
+              ],
+              [
+                "softmax"
+              ],
+              [
+                "cast_probs",
+                "matmul_pv",
+                "transpose_out",
+                "contiguous_out"
+              ],
+              [
+                "sum_h2o_score"
+              ],
+              [
+                "view_out",
+                "view_h2o"
+              ],
+              [
+                "topk_selection"
+              ],
+              [
+                "sort_selected"
+              ],
+              [
+                "expand_selected"
+              ],
+              [
+                "gather_k"
+              ],
+              [
+                "gather_v"
+              ],
+              [
+                "concat_kv_cache",
+                "view_kv_cache"
+              ]
+            ]
+          }
+        },
+        "operators": [
+          {
+            "name": "make_mask",
+            "op_type": "mask_create",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 0.0,
+            "estimated_write_bytes": 8192,
+            "estimated_total_bytes": 8192.0,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "causal_triu",
+            "op_type": "triu",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 4096.0,
+            "estimated_read_bytes": 8192,
+            "estimated_write_bytes": 8192,
+            "estimated_total_bytes": 16384,
+            "arithmetic_intensity": 0.25,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "transpose_q",
+            "op_type": "transpose_q",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 8192,
+            "estimated_write_bytes": 8192,
+            "estimated_total_bytes": 16384,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "transpose_k",
+            "op_type": "transpose_k",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 33554432,
+            "estimated_write_bytes": 33554432,
+            "estimated_total_bytes": 67108864,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "transpose_v",
+            "op_type": "transpose_v",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 33554432,
+            "estimated_write_bytes": 33554432,
+            "estimated_total_bytes": 67108864,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "matmul_qk",
+            "op_type": "matmul_qk",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 33554432.0,
+            "estimated_read_bytes": 33562624,
+            "estimated_write_bytes": 262144,
+            "estimated_total_bytes": 33824768,
+            "arithmetic_intensity": 0.9920077500605473,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "div_scale",
+            "op_type": "div_scale",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 131072.0,
+            "estimated_read_bytes": 262144,
+            "estimated_write_bytes": 262144,
+            "estimated_total_bytes": 524288,
+            "arithmetic_intensity": 0.25,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "add_mask",
+            "op_type": "add_mask",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 131072.0,
+            "estimated_read_bytes": 270336,
+            "estimated_write_bytes": 262144,
+            "estimated_total_bytes": 532480,
+            "arithmetic_intensity": 0.24615384615384617,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "cast_scores_fp32",
+            "op_type": "cast_scores_fp32",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 262144,
+            "estimated_write_bytes": 524288,
+            "estimated_total_bytes": 786432,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "softmax",
+            "op_type": "softmax",
+            "has_reduce": true,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 655360.0,
+            "estimated_read_bytes": 524288,
+            "estimated_write_bytes": 524288,
+            "estimated_total_bytes": 1048576,
+            "arithmetic_intensity": 0.625,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "cast_probs",
+            "op_type": "cast_probs",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 524288,
+            "estimated_write_bytes": 262144,
+            "estimated_total_bytes": 786432,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "matmul_pv",
+            "op_type": "matmul_pv",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 33554432.0,
+            "estimated_read_bytes": 33816576,
+            "estimated_write_bytes": 8192,
+            "estimated_total_bytes": 33824768,
+            "arithmetic_intensity": 0.9920077500605473,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "transpose_out",
+            "op_type": "transpose_out",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 8192,
+            "estimated_write_bytes": 8192,
+            "estimated_total_bytes": 16384,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "contiguous_out",
+            "op_type": "contiguous_out",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 8192,
+            "estimated_write_bytes": 8192,
+            "estimated_total_bytes": 16384,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "sum_h2o_score",
+            "op_type": "sum_h2o_score",
+            "has_reduce": true,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 524288,
+            "estimated_write_bytes": 524288,
+            "estimated_total_bytes": 1048576,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "view_out",
+            "op_type": "view_out",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 0.0,
+            "estimated_write_bytes": 0.0,
+            "estimated_total_bytes": 0.0,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "meta",
+            "note": ""
+          },
+          {
+            "name": "view_h2o",
+            "op_type": "view_h2o",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 0.0,
+            "estimated_write_bytes": 0.0,
+            "estimated_total_bytes": 0.0,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "meta",
+            "note": ""
+          },
+          {
+            "name": "topk_selection",
+            "op_type": "topk_selection",
+            "has_reduce": true,
+            "has_dynamic_shape": true,
+            "has_irregular_access": true,
+            "estimated_flops": 1179648.0,
+            "estimated_read_bytes": 524288,
+            "estimated_write_bytes": 131072,
+            "estimated_total_bytes": 655360,
+            "arithmetic_intensity": 1.8,
+            "intensity_label": "memory-leaning",
+            "note": "k is runtime configurable; selection is data-dependent"
+          },
+          {
+            "name": "sort_selected",
+            "op_type": "sort_selected",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": true,
+            "estimated_flops": 147456.0,
+            "estimated_read_bytes": 131072,
+            "estimated_write_bytes": 131072,
+            "estimated_total_bytes": 262144,
+            "arithmetic_intensity": 0.5625,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "expand_selected",
+            "op_type": "expand_selected",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 0.0,
+            "estimated_write_bytes": 0.0,
+            "estimated_total_bytes": 0.0,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "meta",
+            "note": ""
+          },
+          {
+            "name": "gather_k",
+            "op_type": "gather_k",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": true,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 20971520,
+            "estimated_write_bytes": 4194304,
+            "estimated_total_bytes": 25165824,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "gather_v",
+            "op_type": "gather_v",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": true,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 20971520,
+            "estimated_write_bytes": 4194304,
+            "estimated_total_bytes": 25165824,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "concat_kv_cache",
+            "op_type": "concat_kv_cache",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 8388608,
+            "estimated_write_bytes": 8388608,
+            "estimated_total_bytes": 16777216,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "memory-leaning",
+            "note": ""
+          },
+          {
+            "name": "view_kv_cache",
+            "op_type": "view_kv_cache",
+            "has_reduce": false,
+            "has_dynamic_shape": false,
+            "has_irregular_access": false,
+            "estimated_flops": 0.0,
+            "estimated_read_bytes": 0.0,
+            "estimated_write_bytes": 0.0,
+            "estimated_total_bytes": 0.0,
+            "arithmetic_intensity": 0.0,
+            "intensity_label": "meta",
+            "note": ""
+          }
+        ]
+      },
+      "comparison": {
+        "prefill_vs_decode_flops_ratio": 4025.3840429929724,
+        "prefill_vs_decode_rw_bytes_ratio": 72.80782536084934,
+        "prefill_vs_decode_global_ai_ratio": 55.28779390185613
+      }
+    }
+  }
+}

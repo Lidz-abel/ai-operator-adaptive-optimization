@@ -1,0 +1,103 @@
+digraph call_flow {
+  rankdir=LR;
+  graph [
+    splines=true,
+    nodesep=0.45,
+    ranksep=0.75,
+    fontname="Helvetica",
+    fontsize=12,
+    labelloc=t,
+    label="Appendix A: test_prefill_vs_decode.py Call Flow"
+  ];
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    fillcolor="#F7FAFC",
+    color="#4A5568",
+    fontname="Helvetica",
+    fontsize=10,
+    margin="0.12,0.08"
+  ];
+
+  edge [
+    color="#4A5568",
+    arrowsize=0.7,
+    penwidth=1.1,
+    fontname="Helvetica",
+    fontsize=9
+  ];
+
+  subgraph cluster_entry {
+    label="Entry Layer";
+    color="#CBD5E0";
+    style="rounded";
+
+    A0 [label="CLI\npython test_prefill_vs_decode.py ..."];
+    A1 [label="main()\nparse args + resolve model/bandwidth"];
+    A2 [label="PrefillDecodeComparison.__init__()\nload model + init profilers"];
+
+    A0 -> A1 -> A2;
+  }
+
+  B0 [label="compare(context_lengths, warmup, runs, repeats)", fillcolor="#EBF8FF", color="#2B6CB0"];
+
+  subgraph cluster_loop {
+    label="Loop Layer (for each context_len)";
+    color="#CBD5E0";
+    style="rounded";
+
+    B1 [label="run_prefill_test()\nq_len=context_len, kv_len=context_len"];
+    B2 [label="run_decode_test()\nq_len=1, kv_len=context_len"];
+  }
+
+  subgraph cluster_stage {
+    label="Single-Stage Execution (run_single_test)";
+    color="#CBD5E0";
+    style="rounded";
+
+    C0 [label="_prepare_inputs()\nmodel.prepare -> inputs/output_names"];
+    C1 [label="_build_runner()\ncompile.py::compile(system=...)"];
+    C2 [label="_maybe_check_outputs()\n(optional correctness check)"];
+    C3 [label="_forward() + flatten_tensors(outputs)"];
+
+    C4 [label="_measure_timing()\nwarmup + GPU Event + sync wall-clock", fillcolor="#FFF5F5", color="#C53030"];
+    C5 [label="_measure_memory()\nbase/peak allocated+reserved", fillcolor="#FFF5F5", color="#C53030"];
+    C6 [label="estimate_memory_traffic()\nio_lower_bound / eager_estimate", fillcolor="#FFF5F5", color="#C53030"];
+    C7 [label="calculate_attention_flops()\ndense / causal", fillcolor="#FFF5F5", color="#C53030"];
+
+    C8 [label="OOM?", shape=diamond, style="filled", fillcolor="#FEFCBF", color="#B7791F", margin="0.08,0.06"];
+    C9 [label="return {status: oom, ...}\n(when oom_policy=skip)", fillcolor="#FFF5F5", color="#C53030"];
+    C10 [label="aggregate metrics\ntime + repeat + flops/tflops + bandwidth + memory", fillcolor="#E6FFFA", color="#2C7A7B"];
+
+    C0 -> C1 -> C2 -> C3;
+    C3 -> C4;
+    C3 -> C5;
+    C3 -> C6;
+    C3 -> C7;
+
+    C4 -> C8;
+    C5 -> C8;
+    C6 -> C8;
+    C7 -> C8;
+
+    C8 -> C9 [label="yes"];
+    C8 -> C10 [label="no"];
+  }
+
+  D0 [label="append prefill/decode result"];
+  D1 [label="_print_comparison()\nmedian/p95 ratio + peak memory delta"];
+  D2 [label="next context_len"];
+  E0 [label="collect all results", fillcolor="#EBF8FF", color="#2B6CB0"];
+  E1 [label="json.dump(output_path)", fillcolor="#EBF8FF", color="#2B6CB0"];
+
+  A2 -> B0;
+  B0 -> B1;
+  B0 -> B2;
+  B1 -> C0;
+  B2 -> C0;
+
+  C9 -> D0;
+  C10 -> D0;
+  D0 -> D1 -> D2 -> E0 -> E1;
+}

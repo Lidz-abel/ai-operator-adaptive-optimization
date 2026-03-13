@@ -1,0 +1,46 @@
+================================================================================
+Phase 1 Baseline: Prefill vs Decode
+================================================================================
+Model: h2o -> h2o
+System: torch
+Context Lengths: [2048, 4096, 8192]
+Batch Size: 1
+Head Num / Head Dim: 32 / 128
+DType: float16
+Warmup / Runs / Repeats: 10 / 50 / 3
+Check Outputs: False
+Seed: 0
+Device: cuda:0 (NVIDIA GeForce RTX 3090)
+Theoretical BW: 936.0 GB/s
+CUDA Version: 12.1
+PyTorch Version: 2.2.2+cu121
+================================================================================
+
+================================================================================
+Testing context_len = 2048
+================================================================================
+
+[Prefill] context_len=2048
+Traceback (most recent call last):
+  File "/data2/ldz/FlashTensor-AE/decode_experiments/phase1_baseline/test_prefill_vs_decode.py", line 743, in <module>
+    main()
+  File "/data2/ldz/FlashTensor-AE/decode_experiments/phase1_baseline/test_prefill_vs_decode.py", line 714, in main
+    results = comparison.compare(
+  File "/data2/ldz/FlashTensor-AE/decode_experiments/phase1_baseline/test_prefill_vs_decode.py", line 593, in compare
+    prefill_result = self.run_prefill_test(context_len, **kwargs)
+  File "/data2/ldz/FlashTensor-AE/decode_experiments/phase1_baseline/test_prefill_vs_decode.py", line 548, in run_prefill_test
+    return self.run_single_test(
+  File "/data2/ldz/FlashTensor-AE/decode_experiments/phase1_baseline/test_prefill_vs_decode.py", line 442, in run_single_test
+    outputs = flatten_tensors(self._forward(runner, inputs))
+  File "/data2/ldz/FlashTensor-AE/decode_experiments/phase1_baseline/test_prefill_vs_decode.py", line 314, in _forward
+    return f(*inputs)
+  File "/data2/ldz/FlashTensor-AE/baseline_venv/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1511, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/data2/ldz/FlashTensor-AE/baseline_venv/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1520, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/data2/ldz/FlashTensor-AE/asuka_exp/cases/kernels/h2o.py", line 31, in forward
+    probs = F.softmax(scores.float(), dim=-1)
+  File "/data2/ldz/FlashTensor-AE/baseline_venv/lib/python3.10/site-packages/torch/nn/functional.py", line 1858, in softmax
+    ret = input.softmax(dim)
+torch.cuda.OutOfMemoryError: CUDA out of memory. Tried to allocate 512.00 MiB. GPU 0 has a total capacity of 23.57 GiB of which 250.75 MiB is free. Process 2997241 has 22.17 GiB memory in use. Including non-PyTorch memory, this process has 1.14 GiB memory in use. Of the allocated memory 832.12 MiB is allocated by PyTorch, and 23.88 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+Error: results/prefill_vs_decode_h2o_20260306_175752.json not found

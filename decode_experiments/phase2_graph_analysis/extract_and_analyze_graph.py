@@ -1,399 +1,593 @@
-# decode_experiments/phase2_graph_analysis/extract_and_analyze_graph.py
-
+#!/usr/bin/env python3
 """
-Phase 2: 计算图提取与分析
-目标：
-1. 提取 H2O Decode 阶段的真实计算图
-2. 分析算子碎片化程度
-3. 模拟 FlashTensor Algorithm 1 的 Kernel 识别
-4. 生成可视化报告
+Phase 2 (revised): strict and fair graph-level analysis for decode vs prefill.
+
+What is fixed compared with the old script:
+1) No hardcoded latency/speedup claims.
+2) No hardcoded "15us launch overhead" assumption.
+3) Explicit analysis scope:
+   - attention_only: kernel-level H2O path (asuka_exp/cases/kernels/h2o.py)
+   - attention_plus_cache: model-level H2O cache selection extension
+4) Same estimation rules and kernel-boundary policy are applied to prefill/decode.
+5) Output includes full assumptions for auditability.
 """
 
-import torch
-import torch.nn as nn
-from typing import List, Dict, Tuple, Set
+from __future__ import annotations
+
+import argparse
 import json
-from dataclasses import dataclass, asdict
-from collections import defaultdict
-import sys
+import math
 import os
-
-# 添加项目路径
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../'))
-# 如果你不需要实际加载模型，下面这行可以注释掉，因为我们用的是手动分析
-# from asuka_exp.cases.kernels.h2o import H2O
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from typing import Callable, Dict, List, Sequence
 
 
-@dataclass
-class OperatorInfo:
-    """算子信息"""
+DTYPE_BYTES = {
+    "float16": 2,
+    "bfloat16": 2,
+    "float32": 4,
+}
+
+
+@dataclass(frozen=True)
+class ShapeConfig:
+    batch_size: int
+    q_len: int
+    kv_len: int
+    head_num: int
+    kv_head_num: int
+    head_dim: int
+    cache_budget: int
+    dtype: str
+    compute_intensity_threshold: float
+
+    @property
+    def dtype_bytes(self) -> int:
+        return DTYPE_BYTES[self.dtype]
+
+    @property
+    def fp32_bytes(self) -> int:
+        return 4
+
+    @property
+    def selected_len(self) -> int:
+        return min(self.cache_budget, self.kv_len)
+
+
+@dataclass(frozen=True)
+class OpSpec:
     name: str
     op_type: str
-    is_compute_intensive: bool
-    is_memory_intensive: bool
-    has_reduce: bool
-    
+    has_reduce: bool = False
+    has_dynamic_shape: bool = False
+    has_irregular_access: bool = False
+    scope: str = "attention_only"
+    note: str = ""
+
 
 @dataclass
-class GraphAnalysisResult:
-    """计算图分析结果"""
-    total_ops: int
-    compute_ops: int
-    memory_ops: int
-    reduce_ops: int
-    element_wise_ops: int
-    kernel_boundaries: List[int]  # 基于 Algorithm 1 识别的边界
-    fragmentation_score: float
-    operators: List[OperatorInfo]
+class OpEstimate:
+    name: str
+    op_type: str
+    has_reduce: bool
+    has_dynamic_shape: bool
+    has_irregular_access: bool
+    estimated_flops: float
+    estimated_read_bytes: float
+    estimated_write_bytes: float
+    estimated_total_bytes: float
+    arithmetic_intensity: float
+    intensity_label: str
+    note: str
 
 
-class ManualGraphAnalyzer:
-    """
-    手动分析 H2O 的计算图
-    基于源代码直接分析，不依赖 FX/TorchScript
-    """
-    
-    def __init__(self, model_type='decode'):
-        self.model_type = model_type  # 'decode' or 'prefill'
-        self.operators =[]
-        
-    def analyze_h2o_forward(self) -> GraphAnalysisResult:
-        """
-        手动分析 H2O 的 forward 函数
-        
-        H2O forward 的完整操作序列（包含 TopK 和 Gather）：
-        1-3.   transpose (q, k, v)
-        4.     matmul (q @ k.T)
-        5.     div (scores / sqrt(d))
-        6.     add (scores + mask)
-        7.     softmax (probs) - Reduce 1
-        8.     matmul (probs @ v)
-        9.     transpose (output)
-        10.    contiguous (output)
-        11.    sum (h2o_score) - Reduce 2
-        12.    topk (select heavy hitters) - Reduce 3 + Dynamic Shape!
-        13-14. gather (k, v from selected indices) - Irregular memory access
-        15-16. view (output reshape)
-        """
-        
-        print("\n" + "="*70)
-        print(f"Analyzing H2O {self.model_type.upper()} Computation Graph (Manual)")
-        print("="*70)
-        
-        # 定义完整的操作序列（包含 H2O 核心的 TopK 和 KV Cache 收集）
-        ops =[
-            ("transpose_q", "transpose", False, True, False),
-            ("transpose_k", "transpose", False, True, False),
-            ("transpose_v", "transpose", False, True, False),
-            ("matmul_qk", "matmul", True, False, False),
-            ("div_scale", "div", False, False, False),
-            ("add_mask", "add", False, False, False),
-            ("softmax", "softmax", False, False, True),  # Reduce 1
-            ("matmul_pv", "matmul", True, False, False),
-            ("transpose_out", "transpose", False, True, False),
-            ("contiguous", "contiguous", False, True, False),
-            ("sum_h2o_score", "sum", False, False, True),  # Reduce 2
-            ("topk_selection", "topk", False, True, True),  # Reduce 3 + Dynamic Shape!
-            ("gather_k", "gather", False, True, False),     # Irregular memory access
-            ("gather_v", "gather", False, True, False),     # Irregular memory access
-            ("view_out", "view", False, True, False),
-            ("view_h2o", "view", False, True, False),
-        ]
-        
-        total_ops = len(ops)
-        compute_ops = 0
-        memory_ops = 0
-        reduce_ops = 0
-        element_wise_ops = 0
-        dynamic_shape_ops = 0
-        
-        for idx, (name, op_type, is_compute, is_memory, has_reduce) in enumerate(ops):
-            if is_compute:
-                compute_ops += 1
-            if is_memory:
-                memory_ops += 1
-            if has_reduce:
-                reduce_ops += 1
-            if op_type in ['add', 'mul', 'div', 'sub']:
-                element_wise_ops += 1
-            if op_type == 'topk':
-                dynamic_shape_ops += 1
-            
-            op_info = OperatorInfo(
-                name=name,
-                op_type=op_type,
-                is_compute_intensive=is_compute,
-                is_memory_intensive=is_memory,
-                has_reduce=has_reduce
-            )
-            self.operators.append(op_info)
-            
-            # 特殊标注
-            special_note = ""
-            if op_type == 'topk':
-                special_note = " ⚠️ DYNAMIC SHAPE!"
-            elif op_type == 'gather':
-                special_note = " ⚠️ IRREGULAR ACCESS!"
-            
-            print(f"  [{idx+1:3d}] {name:20s} | {op_type:15s} | "
-                  f"Compute:{is_compute} Memory:{is_memory} Reduce:{has_reduce}{special_note}")
-        
-        # 运行 Algorithm 1
-        kernel_boundaries = self._identify_kernels()
-        
-        # 计算碎片化分数
-        fragmentation_score = len(kernel_boundaries) / total_ops if total_ops > 0 else 0
-        
-        result = GraphAnalysisResult(
-            total_ops=total_ops,
-            compute_ops=compute_ops,
-            memory_ops=memory_ops,
-            reduce_ops=reduce_ops,
-            element_wise_ops=element_wise_ops,
-            kernel_boundaries=kernel_boundaries,
-            fragmentation_score=fragmentation_score,
-            operators=self.operators
-        )
-        
-        self._print_summary(result)
-        
-        # 额外打印动态形状信息
-        if dynamic_shape_ops > 0:
-            print("\n" + "⚠️"*35)
-            print(f"  CRITICAL: {dynamic_shape_ops} operation(s) introduce DYNAMIC SHAPES")
-            print("  → TopK output size depends on K parameter (runtime-determined)")
-            print("  → This requires FlashTensor to support dynamic dimension attributes")
-            print("⚠️"*35)
-        
-        return result
-
-    def _identify_kernels(self) -> List[int]:
-        """
-        实现 FlashTensor Algorithm 1: Kernel Identification
-        
-        核心逻辑：
-        - 如果操作有 Reduce 依赖，则标记为 Kernel 边界
-        - 否则尝试融合到当前 Kernel
-        """
-        print("\n" + "-"*70)
-        print("Running FlashTensor Algorithm 1: Kernel Identification")
-        print("-"*70)
-        
-        kernel_boundaries =[]
-        current_kernel_start = 0
-        kernel_id = 1
-        
-        for idx, op in enumerate(self.operators):
-            if op.has_reduce:
-                # 发现 Reduce 依赖，标记为边界
-                if idx > current_kernel_start:
-                    print(f"  Kernel {kernel_id}: ops {current_kernel_start}-{idx-1}")
-                    kernel_id += 1
-                    kernel_boundaries.append(idx)
-                    print(f"  → Boundary at op {idx}: {op.name} ({op.op_type}) - Reduce dependency")
-                    current_kernel_start = idx + 1
-        
-        # 最后一个 Kernel
-        if current_kernel_start < len(self.operators):
-            print(f"  Kernel {kernel_id}: ops {current_kernel_start}-{len(self.operators)-1}")
-            kernel_boundaries.append(len(self.operators))
-        
-        print(f"\n  Total Kernels identified: {len(kernel_boundaries)}")
-        print(f"  Average ops per kernel: {len(self.operators)/len(kernel_boundaries):.1f}")
-        
-        return kernel_boundaries
-    
-    def _print_summary(self, result: GraphAnalysisResult):
-        """打印分析摘要"""
-        print("\n" + "="*70)
-        print("Graph Analysis Summary")
-        print("="*70)
-        print(f"  Total Operations:        {result.total_ops}")
-        print(f"  Compute Operations:      {result.compute_ops} ({result.compute_ops/result.total_ops*100:.1f}%)")
-        print(f"  Memory Operations:       {result.memory_ops} ({result.memory_ops/result.total_ops*100:.1f}%)")
-        print(f"  Reduce Operations:       {result.reduce_ops} ({result.reduce_ops/result.total_ops*100:.1f}%)")
-        print(f"  Element-wise Operations: {result.element_wise_ops} ({result.element_wise_ops/result.total_ops*100:.1f}%)")
-        print(f"  Kernel Boundaries:       {len(result.kernel_boundaries)}")
-        print(f"  Fragmentation Score:     {result.fragmentation_score:.3f}")
-        print("="*70)
+def _numel(shape: Sequence[int]) -> int:
+    n = 1
+    for dim in shape:
+        n *= int(dim)
+    return n
 
 
-def analyze_fusion_opportunities(decode_result: GraphAnalysisResult):
-    """分析融合机会"""
-    
-    print("\n" + "="*70)
-    print("Fusion Opportunity Analysis")
-    print("="*70)
-    
-    print("\n### Current Baseline (PyTorch Eager) ###")
-    print("  Each operation is a separate kernel")
-    print(f"  Total kernels: {decode_result.total_ops}")
-    
-    print("\n### FlashTensor (Current Algorithm 1) ###")
-    print("  Breaks at Reduce operations (softmax, sum, topk)")
-    print(f"  Total kernels: {len(decode_result.kernel_boundaries)}")
-    
-    # 计算理论融合收益
-    baseline_kernels = decode_result.total_ops
-    flashtensor_kernels = len(decode_result.kernel_boundaries)
-    reduction = (baseline_kernels - flashtensor_kernels) / baseline_kernels * 100
-    
-    print(f"  Kernel reduction: {baseline_kernels} → {flashtensor_kernels} ({reduction:.1f}% reduction)")
-    
-    print("\n  Identified kernel boundaries:")
-    kernel_start = 0
-    for i, boundary in enumerate(decode_result.kernel_boundaries):
-        ops_in_kernel =[op.name for op in decode_result.operators[kernel_start:boundary]]
-        print(f"    Kernel {i+1}: {', '.join(ops_in_kernel)}")
-        kernel_start = boundary
-    
-    print("\n### Proposed: FlashTensor-Decode (Aggressive Fusion) ###")
-    print("  Strategy: Fuse across Reduce for 1×N tensors")
-    print("  Potential fusion plan:")
-    print("    Kernel 1: transpose → matmul → div → add → softmax → matmul → transpose → contiguous")
-    print("              (Fuse attention computation)")
-    print("    Kernel 2: sum → topk → gather → view")
-    print("              (Fuse H2O scoring and selection)")
-    print("  Estimated kernels: 2")
-    
-    print("\n  ⚠️ Challenges:")
-    print("    1. TopK introduces dynamic shape (K is runtime parameter)")
-    print("    2. Gather has irregular memory access pattern")
-    print("    3. Need to support dynamic dimension in attribute propagation")
-    
-    aggressive_kernels = 2
-    aggressive_reduction = (baseline_kernels - aggressive_kernels) / baseline_kernels * 100
-    
-    print(f"\n  Kernel reduction: {baseline_kernels} → {aggressive_kernels} ({aggressive_reduction:.1f}% reduction)")
-    
-    # 估算性能提升
-    print("\n### Performance Impact Estimation ###")
-    
-    # 假设每个 kernel 启动开销 15 μs
-    kernel_launch_overhead_us = 15
-    baseline_overhead_ms = baseline_kernels * kernel_launch_overhead_us / 1000
-    flashtensor_overhead_ms = flashtensor_kernels * kernel_launch_overhead_us / 1000
-    aggressive_overhead_ms = aggressive_kernels * kernel_launch_overhead_us / 1000
-    
-    print(f"  Kernel launch overhead (assuming {kernel_launch_overhead_us} μs per kernel):")
-    print(f"    Baseline:              {baseline_overhead_ms:.3f} ms ({baseline_kernels} kernels)")
-    print(f"    FlashTensor (current): {flashtensor_overhead_ms:.3f} ms ({flashtensor_kernels} kernels)")
-    print(f"    FlashTensor-Decode:    {aggressive_overhead_ms:.3f} ms ({aggressive_kernels} kernels)")
-    
-    # 基于 Phase 1 的实际数据（Decode 0.376 ms）
-    decode_time_ms = 0.376
-    overhead_ratio_baseline = baseline_overhead_ms / decode_time_ms * 100
-    overhead_ratio_flashtensor = flashtensor_overhead_ms / decode_time_ms * 100
-    overhead_ratio_aggressive = aggressive_overhead_ms / decode_time_ms * 100
-    
-    print(f"\n  Overhead as % of total Decode time (Phase 1: {decode_time_ms} ms):")
-    print(f"    Baseline:              {overhead_ratio_baseline:.1f}%")
-    print(f"    FlashTensor (current): {overhead_ratio_flashtensor:.1f}%")
-    print(f"    FlashTensor-Decode:    {overhead_ratio_aggressive:.1f}%")
-    
-    overhead_saving = baseline_overhead_ms - aggressive_overhead_ms
-    print(f"\n  Overhead saving: {overhead_saving:.3f} ms ({overhead_saving/decode_time_ms*100:.1f}% of total time)")
-    
-    # 内存流量减少估算
-    print(f"\n  Memory traffic reduction:")
-    print(f"    Baseline: Each op reads/writes global memory")
-    print(f"              → {baseline_kernels} global memory round-trips")
-    print(f"    FlashTensor-Decode: Intermediate results stay in registers/shared memory")
-    print(f"              → {aggressive_kernels} global memory round-trips")
-    print(f"    Estimated memory traffic reduction: {baseline_kernels/aggressive_kernels:.1f}x")
-    
-    print("\n  Combined speedup estimation:")
-    print(f"    - Kernel launch overhead reduction: {baseline_overhead_ms/aggressive_overhead_ms:.1f}x")
-    print(f"    - Memory traffic reduction: {baseline_kernels/aggressive_kernels:.1f}x")
-    print(f"    - Expected total speedup: 3x-5x")
-    
-    print("\n  Target: Increase bandwidth utilization from 36% to 70-80%")
-    print("="*70)
-
-def compare_prefill_decode():
-    """对比 Prefill 和 Decode 的计算图"""
-    
-    print("\n" + "#"*70)
-    print("# Phase 2: Prefill vs Decode Graph Comparison")
-    print("#"*70)
-    
-    # 分析 Decode 图
-    print("\n### Analyzing Decode Graph (q_len=1, kv_len=8192) ###")
-    decode_analyzer = ManualGraphAnalyzer(model_type='decode')
-    decode_result = decode_analyzer.analyze_h2o_forward()
-    
-    # 分析 Prefill 图（操作序列相同，只是张量大小不同）
-    print("\n\n### Analyzing Prefill Graph (q_len=8192, kv_len=8192) ###")
-    prefill_analyzer = ManualGraphAnalyzer(model_type='prefill')
-    prefill_result = prefill_analyzer.analyze_h2o_forward()
-    
-    # 对比分析
-    print("\n" + "="*70)
-    print("Prefill vs Decode Comparison")
-    print("="*70)
-    print(f"{'Metric':<30s} | {'Prefill':>15s} | {'Decode':>15s} | {'Ratio':>10s}")
-    print("-"*70)
-    print(f"{'Total Operations':<30s} | {prefill_result.total_ops:>15d} | {decode_result.total_ops:>15d} | {prefill_result.total_ops/decode_result.total_ops:>10.2f}x")
-    print(f"{'Compute Operations':<30s} | {prefill_result.compute_ops:>15d} | {decode_result.compute_ops:>15d} | {prefill_result.compute_ops/max(decode_result.compute_ops,1):>10.2f}x")
-    print(f"{'Reduce Operations':<30s} | {prefill_result.reduce_ops:>15d} | {decode_result.reduce_ops:>15d} | {prefill_result.reduce_ops/max(decode_result.reduce_ops,1):>10.2f}x")
-    print(f"{'Kernel Boundaries':<30s} | {len(prefill_result.kernel_boundaries):>15d} | {len(decode_result.kernel_boundaries):>15d} | {len(prefill_result.kernel_boundaries)/max(len(decode_result.kernel_boundaries),1):>10.2f}x")
-    print(f"{'Fragmentation Score':<30s} | {prefill_result.fragmentation_score:>15.3f} | {decode_result.fragmentation_score:>15.3f} | {prefill_result.fragmentation_score/max(decode_result.fragmentation_score,0.001):>10.2f}x")
-    print("="*70)
-    
-    print("\nKey Insight:")
-    print("  虽然 Prefill 和 Decode 的操作序列相同（都是 16 个操作），")
-    print("  但它们的性能瓶颈完全不同：")
-    print("    - Prefill: 受限于 N×N 矩阵的内存复杂度")
-    print("    - Decode:  受限于 1×N 向量的内存带宽和 Kernel 启动开销")
-    
-    # 融合机会分析
-    analyze_fusion_opportunities(decode_result)
-    
-    # 保存结果
-    results = {
-        'decode': asdict(decode_result),
-        'prefill': asdict(prefill_result)
+def _common_sizes(cfg: ShapeConfig) -> Dict[str, int]:
+    b = cfg.batch_size
+    q = cfg.q_len
+    k = cfg.kv_len
+    h = cfg.head_num
+    kvh = cfg.kv_head_num
+    d = cfg.head_dim
+    sel = cfg.selected_len
+    return {
+        "mask": _numel((1, 1, q, k)),
+        "q": _numel((b, q, h, d)),
+        "k": _numel((b, k, kvh, d)),
+        "v": _numel((b, k, kvh, d)),
+        "q_t": _numel((b, h, q, d)),
+        "k_t": _numel((b, kvh, k, d)),
+        "v_t": _numel((b, kvh, k, d)),
+        "scores": _numel((b, h, q, k)),
+        "out_t": _numel((b, h, q, d)),
+        "out": _numel((b, q, h, d)),
+        "h2o_score": _numel((b, kvh, k)),
+        "selected_idx": _numel((b, kvh, sel)),
+        "gather_out": _numel((b, sel, kvh, d)),
+        "kv_cache": _numel((b, 2, sel, kvh, d)),
     }
-    
-    output_dir = 'decode_experiments/phase2_graph_analysis/results'
-    os.makedirs(output_dir, exist_ok=True)
-    output_file = os.path.join(output_dir, 'graph_analysis_results.json')
-    
-    with open(output_file, 'w') as f:
-        json.dump(results, f, indent=2)
-    
-    print(f"\n✓ Results saved to: {output_file}")
-    
-    return decode_result, prefill_result
 
 
-def main():
-    """主函数"""
-    
-    print("\n" + "#"*70)
-    print("# Phase 2: Graph Analysis & Kernel Identification")
-    print("# Method: Manual analysis based on H2O source code")
-    print("#"*70)
-    
-    # 运行对比分析
-    decode_result, prefill_result = compare_prefill_decode()
-    
-    print("\n" + "#"*70)
-    print("# Phase 2 Complete!")
-    print("#"*70)
-    print("\nKey Findings:")
-    print(f"  1. H2O has {decode_result.total_ops} operations in forward pass")
-    print(f"  2. FlashTensor Algorithm 1 identifies {len(decode_result.kernel_boundaries)} kernel boundaries")
-    print(f"  3. Reduce operations: {decode_result.reduce_ops} (softmax, sum, topk)")
-    print(f"  4. Fragmentation score: {decode_result.fragmentation_score:.3f}")
-    print(f"  5. Baseline would use {decode_result.total_ops} kernels")
-    print(f"  6. Aggressive fusion could reduce to 2-3 kernels")
-    
-    print("\nNext Steps:")
-    print("  → Phase 3: Implement aggressive fusion rules in FlashTensor")
-    print("  → Phase 4: Benchmark the fused kernel")
-    print("  → Phase 5: End-to-end evaluation")
+def _intensity_label(flops: float, total_bytes: float, threshold: float) -> str:
+    if total_bytes <= 0:
+        return "meta"
+    if flops <= 0:
+        return "memory-leaning"
+    ai = flops / total_bytes
+    return "compute-leaning" if ai >= threshold else "memory-leaning"
 
 
-if __name__ == '__main__':
+def _estimate_op(spec: OpSpec, cfg: ShapeConfig) -> OpEstimate:
+    sz = _common_sizes(cfg)
+    bpe = cfg.dtype_bytes
+    fp32 = cfg.fp32_bytes
+
+    flops = 0.0
+    read_bytes = 0.0
+    write_bytes = 0.0
+
+    if spec.op_type == "mask_create":
+        write_bytes = sz["mask"] * bpe
+    elif spec.op_type == "triu":
+        flops = float(sz["mask"])
+        read_bytes = sz["mask"] * bpe
+        write_bytes = sz["mask"] * bpe
+    elif spec.op_type == "transpose_q":
+        read_bytes = sz["q"] * bpe
+        write_bytes = sz["q_t"] * bpe
+    elif spec.op_type == "transpose_k":
+        read_bytes = sz["k"] * bpe
+        write_bytes = sz["k_t"] * bpe
+    elif spec.op_type == "transpose_v":
+        read_bytes = sz["v"] * bpe
+        write_bytes = sz["v_t"] * bpe
+    elif spec.op_type == "matmul_qk":
+        # [B, H, Q, D] x [B, H, D, K] -> [B, H, Q, K]
+        flops = float(2 * cfg.batch_size * cfg.head_num * cfg.q_len * cfg.kv_len * cfg.head_dim)
+        read_bytes = (sz["q_t"] + sz["k_t"]) * bpe
+        write_bytes = sz["scores"] * bpe
+    elif spec.op_type == "div_scale":
+        flops = float(sz["scores"])
+        read_bytes = sz["scores"] * bpe
+        write_bytes = sz["scores"] * bpe
+    elif spec.op_type == "add_mask":
+        flops = float(sz["scores"])
+        # Mask is broadcast over batch/head; keep logical read for fairness.
+        read_bytes = (sz["scores"] + sz["mask"]) * bpe
+        write_bytes = sz["scores"] * bpe
+    elif spec.op_type == "cast_scores_fp32":
+        read_bytes = sz["scores"] * bpe
+        write_bytes = sz["scores"] * fp32
+    elif spec.op_type == "softmax":
+        # Approximation: max/sub/exp/sum/div ~= 5 FLOPs per element.
+        flops = float(5 * sz["scores"])
+        read_bytes = sz["scores"] * fp32
+        write_bytes = sz["scores"] * fp32
+    elif spec.op_type == "cast_probs":
+        read_bytes = sz["scores"] * fp32
+        write_bytes = sz["scores"] * bpe
+    elif spec.op_type == "matmul_pv":
+        # [B, H, Q, K] x [B, H, K, D] -> [B, H, Q, D]
+        flops = float(2 * cfg.batch_size * cfg.head_num * cfg.q_len * cfg.kv_len * cfg.head_dim)
+        read_bytes = (sz["scores"] + sz["v_t"]) * bpe
+        write_bytes = sz["out_t"] * bpe
+    elif spec.op_type == "transpose_out":
+        read_bytes = sz["out_t"] * bpe
+        write_bytes = sz["out"] * bpe
+    elif spec.op_type == "contiguous_out":
+        read_bytes = sz["out"] * bpe
+        write_bytes = sz["out"] * bpe
+    elif spec.op_type == "sum_h2o_score":
+        # reduce over q_len dimension
+        flops = float(cfg.batch_size * cfg.kv_head_num * cfg.kv_len * max(cfg.q_len - 1, 0))
+        read_bytes = sz["scores"] * fp32
+        write_bytes = sz["h2o_score"] * fp32
+    elif spec.op_type == "view_out":
+        pass
+    elif spec.op_type == "view_h2o":
+        pass
+    elif spec.op_type == "topk_selection":
+        # Heuristic complexity proxy for selection.
+        flops = float(
+            cfg.batch_size
+            * cfg.kv_head_num
+            * cfg.kv_len
+            * max(math.log2(max(cfg.selected_len, 2)), 1.0)
+        )
+        read_bytes = sz["h2o_score"] * fp32
+        write_bytes = sz["selected_idx"] * 8  # torch.topk index output is int64
+    elif spec.op_type == "sort_selected":
+        flops = float(
+            cfg.batch_size
+            * cfg.kv_head_num
+            * cfg.selected_len
+            * max(math.log2(max(cfg.selected_len, 2)), 1.0)
+        )
+        read_bytes = sz["selected_idx"] * 8
+        write_bytes = sz["selected_idx"] * 8
+    elif spec.op_type == "expand_selected":
+        pass
+    elif spec.op_type == "gather_k":
+        read_bytes = sz["gather_out"] * bpe + sz["gather_out"] * 8
+        write_bytes = sz["gather_out"] * bpe
+    elif spec.op_type == "gather_v":
+        read_bytes = sz["gather_out"] * bpe + sz["gather_out"] * 8
+        write_bytes = sz["gather_out"] * bpe
+    elif spec.op_type == "concat_kv_cache":
+        read_bytes = 2 * sz["gather_out"] * bpe
+        write_bytes = sz["kv_cache"] * bpe
+    elif spec.op_type == "view_kv_cache":
+        pass
+    else:
+        raise ValueError(f"Unsupported op_type: {spec.op_type}")
+
+    total_bytes = read_bytes + write_bytes
+    ai = (flops / total_bytes) if total_bytes > 0 else 0.0
+    return OpEstimate(
+        name=spec.name,
+        op_type=spec.op_type,
+        has_reduce=spec.has_reduce,
+        has_dynamic_shape=spec.has_dynamic_shape,
+        has_irregular_access=spec.has_irregular_access,
+        estimated_flops=flops,
+        estimated_read_bytes=read_bytes,
+        estimated_write_bytes=write_bytes,
+        estimated_total_bytes=total_bytes,
+        arithmetic_intensity=ai,
+        intensity_label=_intensity_label(flops, total_bytes, cfg.compute_intensity_threshold),
+        note=spec.note,
+    )
+
+
+def _attention_only_ops() -> List[OpSpec]:
+    return [
+        OpSpec("make_mask", "mask_create"),
+        OpSpec("causal_triu", "triu"),
+        OpSpec("transpose_q", "transpose_q", has_irregular_access=False),
+        OpSpec("transpose_k", "transpose_k", has_irregular_access=False),
+        OpSpec("transpose_v", "transpose_v", has_irregular_access=False),
+        OpSpec("matmul_qk", "matmul_qk"),
+        OpSpec("div_scale", "div_scale"),
+        OpSpec("add_mask", "add_mask"),
+        OpSpec("cast_scores_fp32", "cast_scores_fp32"),
+        OpSpec("softmax", "softmax", has_reduce=True),
+        OpSpec("cast_probs", "cast_probs"),
+        OpSpec("matmul_pv", "matmul_pv"),
+        OpSpec("transpose_out", "transpose_out"),
+        OpSpec("contiguous_out", "contiguous_out"),
+        OpSpec("sum_h2o_score", "sum_h2o_score", has_reduce=True),
+        OpSpec("view_out", "view_out"),
+        OpSpec("view_h2o", "view_h2o"),
+    ]
+
+
+def _attention_plus_cache_ops() -> List[OpSpec]:
+    ops = list(_attention_only_ops())
+    ops.extend(
+        [
+            OpSpec(
+                "topk_selection",
+                "topk_selection",
+                has_reduce=True,
+                has_dynamic_shape=True,
+                has_irregular_access=True,
+                scope="attention_plus_cache",
+                note="k is runtime configurable; selection is data-dependent",
+            ),
+            OpSpec(
+                "sort_selected",
+                "sort_selected",
+                has_irregular_access=True,
+                scope="attention_plus_cache",
+            ),
+            OpSpec(
+                "expand_selected",
+                "expand_selected",
+                scope="attention_plus_cache",
+            ),
+            OpSpec(
+                "gather_k",
+                "gather_k",
+                has_irregular_access=True,
+                scope="attention_plus_cache",
+            ),
+            OpSpec(
+                "gather_v",
+                "gather_v",
+                has_irregular_access=True,
+                scope="attention_plus_cache",
+            ),
+            OpSpec(
+                "concat_kv_cache",
+                "concat_kv_cache",
+                scope="attention_plus_cache",
+            ),
+            OpSpec(
+                "view_kv_cache",
+                "view_kv_cache",
+                scope="attention_plus_cache",
+            ),
+        ]
+    )
+    return ops
+
+
+def _get_ops(scope: str) -> List[OpSpec]:
+    if scope == "attention_only":
+        return _attention_only_ops()
+    if scope == "attention_plus_cache":
+        return _attention_plus_cache_ops()
+    raise ValueError(f"Unknown scope: {scope}")
+
+
+def _pack_kernels(
+    op_estimates: Sequence[OpEstimate], barrier_fn: Callable[[OpEstimate], bool]
+) -> List[List[str]]:
+    kernels: List[List[str]] = []
+    current: List[str] = []
+    for op in op_estimates:
+        if barrier_fn(op):
+            if current:
+                kernels.append(current)
+                current = []
+            kernels.append([op.name])  # barrier op stands alone
+            continue
+        current.append(op.name)
+    if current:
+        kernels.append(current)
+    return kernels
+
+
+def _kernel_policies() -> Dict[str, Callable[[OpEstimate], bool]]:
+    return {
+        # Similar spirit to current Algorithm-1 style split-by-reduce.
+        "reduce_barrier": lambda op: op.has_reduce,
+        # More conservative decode policy for irregular accesses.
+        "reduce_or_irregular_barrier": lambda op: op.has_reduce or op.has_irregular_access,
+        # Strictest policy: reduce + dynamic shape + irregular access.
+        "strict_decode_barrier": lambda op: (
+            op.has_reduce or op.has_dynamic_shape or op.has_irregular_access
+        ),
+    }
+
+
+def _analyze_scope(scope: str, cfg: ShapeConfig) -> Dict:
+    specs = _get_ops(scope)
+    ops = [_estimate_op(spec, cfg) for spec in specs]
+
+    total_flops = sum(op.estimated_flops for op in ops)
+    total_read = sum(op.estimated_read_bytes for op in ops)
+    total_write = sum(op.estimated_write_bytes for op in ops)
+    total_bytes = total_read + total_write
+    global_ai = (total_flops / total_bytes) if total_bytes > 0 else 0.0
+
+    policies = {}
+    for policy_name, barrier_fn in _kernel_policies().items():
+        kernels = _pack_kernels(ops, barrier_fn)
+        covered_ops = sum(len(k) for k in kernels)
+        policies[policy_name] = {
+            "kernel_count": len(kernels),
+            "covered_ops": covered_ops,
+            "coverage_ok": covered_ops == len(ops),
+            "kernels": kernels,
+        }
+
+    return {
+        "scope": scope,
+        "shape": asdict(cfg),
+        "summary": {
+            "total_ops": len(ops),
+            "reduce_ops": sum(1 for op in ops if op.has_reduce),
+            "dynamic_shape_ops": sum(1 for op in ops if op.has_dynamic_shape),
+            "irregular_access_ops": sum(1 for op in ops if op.has_irregular_access),
+            "estimated_total_flops": total_flops,
+            "estimated_total_read_bytes": total_read,
+            "estimated_total_write_bytes": total_write,
+            "estimated_total_rw_bytes": total_bytes,
+            "global_arithmetic_intensity": global_ai,
+            "compute_intensity_threshold": cfg.compute_intensity_threshold,
+        },
+        "kernel_policies": policies,
+        "operators": [asdict(op) for op in ops],
+    }
+
+
+def _ratio(a: float, b: float) -> float:
+    return a / b if b != 0 else float("inf")
+
+
+def _compare(prefill: Dict, decode: Dict) -> Dict:
+    ps = prefill["summary"]
+    ds = decode["summary"]
+    return {
+        "prefill_vs_decode_flops_ratio": _ratio(
+            ps["estimated_total_flops"], ds["estimated_total_flops"]
+        ),
+        "prefill_vs_decode_rw_bytes_ratio": _ratio(
+            ps["estimated_total_rw_bytes"], ds["estimated_total_rw_bytes"]
+        ),
+        "prefill_vs_decode_global_ai_ratio": _ratio(
+            ps["global_arithmetic_intensity"], ds["global_arithmetic_intensity"]
+        ),
+    }
+
+
+def _to_gb(v: float) -> float:
+    return v / (1024 ** 3)
+
+
+def _print_scope_report(scope: str, prefill: Dict, decode: Dict) -> None:
+    ps = prefill["summary"]
+    ds = decode["summary"]
+    cmp_metrics = _compare(prefill, decode)
+
+    print("\n" + "=" * 84)
+    print(f"Scope: {scope}")
+    print("=" * 84)
+    print(f"{'Metric':<40s} | {'Prefill':>16s} | {'Decode':>16s} | {'Ratio':>10s}")
+    print("-" * 84)
+    print(
+        f"{'Total ops':<40s} | {ps['total_ops']:>16d} | {ds['total_ops']:>16d} | "
+        f"{_ratio(ps['total_ops'], ds['total_ops']):>10.2f}x"
+    )
+    print(
+        f"{'Estimated FLOPs':<40s} | {ps['estimated_total_flops']:>16.3e} | "
+        f"{ds['estimated_total_flops']:>16.3e} | {cmp_metrics['prefill_vs_decode_flops_ratio']:>10.2f}x"
+    )
+    print(
+        f"{'Estimated RW bytes (GB)':<40s} | {_to_gb(ps['estimated_total_rw_bytes']):>16.4f} | "
+        f"{_to_gb(ds['estimated_total_rw_bytes']):>16.4f} | {cmp_metrics['prefill_vs_decode_rw_bytes_ratio']:>10.2f}x"
+    )
+    print(
+        f"{'Global arithmetic intensity (FLOPs/Byte)':<40s} | {ps['global_arithmetic_intensity']:>16.4f} | "
+        f"{ds['global_arithmetic_intensity']:>16.4f} | {cmp_metrics['prefill_vs_decode_global_ai_ratio']:>10.2f}x"
+    )
+
+    for policy in ("reduce_barrier", "reduce_or_irregular_barrier", "strict_decode_barrier"):
+        pk = prefill["kernel_policies"][policy]["kernel_count"]
+        dk = decode["kernel_policies"][policy]["kernel_count"]
+        print(f"{f'Kernel count ({policy})':<40s} | {pk:>16d} | {dk:>16d} | {_ratio(pk, dk):>10.2f}x")
+
+    print("-" * 84)
+    print(
+        "Notes: no hardcoded kernel-launch or end-to-end latency assumptions are used in this phase."
+    )
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Strict/fair graph analysis for FlashTensor decode migration."
+    )
+    parser.add_argument(
+        "--scope",
+        choices=["attention_only", "attention_plus_cache", "both"],
+        default="both",
+        help="Analysis scope. 'both' runs both scopes.",
+    )
+    parser.add_argument("--batch_size", type=int, default=1)
+    parser.add_argument("--q_len_prefill", type=int, default=4096)
+    parser.add_argument("--q_len_decode", type=int, default=1)
+    parser.add_argument("--kv_len", type=int, default=4096)
+    parser.add_argument("--head_num", type=int, default=32)
+    parser.add_argument("--kv_head_num", type=int, default=32)
+    parser.add_argument("--head_dim", type=int, default=128)
+    parser.add_argument("--cache_budget", type=int, default=512)
+    parser.add_argument("--dtype", choices=sorted(DTYPE_BYTES.keys()), default="float16")
+    parser.add_argument(
+        "--compute_intensity_threshold",
+        type=float,
+        default=8.0,
+        help="Threshold used for per-op compute/memory leaning classification.",
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default=os.path.join(os.path.dirname(__file__), "results"),
+    )
+    parser.add_argument("--tag", type=str, default="")
+    parser.add_argument(
+        "--print_ops",
+        action="store_true",
+        help="Print operator-level estimates for audit/debug.",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+
+    scopes = (
+        ["attention_only", "attention_plus_cache"]
+        if args.scope == "both"
+        else [args.scope]
+    )
+
+    config_common = {
+        "batch_size": args.batch_size,
+        "kv_len": args.kv_len,
+        "head_num": args.head_num,
+        "kv_head_num": args.kv_head_num,
+        "head_dim": args.head_dim,
+        "cache_budget": args.cache_budget,
+        "dtype": args.dtype,
+        "compute_intensity_threshold": args.compute_intensity_threshold,
+    }
+    prefill_cfg = ShapeConfig(q_len=args.q_len_prefill, **config_common)
+    decode_cfg = ShapeConfig(q_len=args.q_len_decode, **config_common)
+
+    output = {
+        "analysis_version": "phase2_v2_strict_fair",
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "methodology": {
+            "fairness_rules": [
+                "prefill/decode use identical operator schema within each scope",
+                "no hardcoded launch-overhead or latency-based speedup claims",
+                "all metrics are produced by transparent formulas in this script",
+                "kernel boundaries are computed by explicit policy functions",
+            ],
+            "notes": [
+                "FLOPs/bytes for topk/sort are heuristic proxies, flagged as such in op notes.",
+                "This phase is graph-cost analysis, not kernel microbenchmark.",
+            ],
+        },
+        "config": {
+            "scope": args.scope,
+            "prefill": asdict(prefill_cfg),
+            "decode": asdict(decode_cfg),
+        },
+        "scopes": {},
+    }
+
+    print("\n" + "#" * 84)
+    print("# Phase 2 Revised: Strict & Fair Graph Analysis")
+    print("#" * 84)
+    print(f"Scopes: {', '.join(scopes)}")
+    print(
+        f"Shape config: B={args.batch_size}, Q(prefill/decode)=({args.q_len_prefill}/{args.q_len_decode}), "
+        f"K={args.kv_len}, H={args.head_num}, KVH={args.kv_head_num}, D={args.head_dim}, "
+        f"cache_budget={args.cache_budget}, dtype={args.dtype}"
+    )
+
+    for scope in scopes:
+        prefill = _analyze_scope(scope, prefill_cfg)
+        decode = _analyze_scope(scope, decode_cfg)
+        cmp_metrics = _compare(prefill, decode)
+        output["scopes"][scope] = {
+            "prefill": prefill,
+            "decode": decode,
+            "comparison": cmp_metrics,
+        }
+
+        _print_scope_report(scope, prefill, decode)
+
+        if args.print_ops:
+            print("\nOperator-level estimates:")
+            for op in decode["operators"]:
+                print(
+                    f"  {op['name']:<20s} "
+                    f"flops={op['estimated_flops']:.3e} "
+                    f"rw_bytes={op['estimated_total_bytes']:.3e} "
+                    f"AI={op['arithmetic_intensity']:.3e} "
+                    f"{op['intensity_label']}"
+                )
+
+    os.makedirs(args.output_dir, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    prefix = f"{args.tag}_" if args.tag else ""
+    out_file = os.path.join(args.output_dir, f"{prefix}graph_analysis_{ts}.json")
+
+    with open(out_file, "w", encoding="utf-8") as f:
+        json.dump(output, f, indent=2, ensure_ascii=False)
+
+    print("\nSaved:", out_file)
+
+
+if __name__ == "__main__":
     main()

@@ -1,0 +1,43 @@
+{
+    "metadata": {
+        "timestamp": "2026-03-07 14:07:19",
+        "model": "attn"
+    },
+    "probes": {
+        "A_symbolic_shape": {
+            "description": "尝试向compile传入symbolic shape，探测是否有动态shape编译路径",
+            "outcome": "compile_crashed",
+            "detail": "compile崩溃: RuntimeError: The size of tensor a (512) must match the size of tensor b (1024) at non-singleton dimension 1",
+            "compile_api_params": [
+                "model",
+                "input_names",
+                "inputs",
+                "output_names",
+                "system"
+            ],
+            "dynamic_related_params": [],
+            "api_has_dynamic_hint": false
+        },
+        "B_multi_shape_compile": {
+            "description": "尝试向compile传入多个shape的inputs列表",
+            "shape_list": [
+                512,
+                1024,
+                2048,
+                4096
+            ],
+            "outcome": "interface_rejected",
+            "detail": "compile不接受多shape列表: Attn.forward() takes 4 positional arguments but 5 were given"
+        },
+        "C_kernel_structure": {
+            "description": "inspect编译产物，寻找动态dispatch机制的痕迹",
+            "outcome": "no_dynamic_mechanism_found",
+            "detail": "产物结构简单，未发现dispatch或多kernel机制",
+            "kernel_type": "function",
+            "kernel_module": "builtins",
+            "dispatch_related_attrs": [],
+            "multi_kernel_hints": [],
+            "all_public_attrs": []
+        }
+    }
+}

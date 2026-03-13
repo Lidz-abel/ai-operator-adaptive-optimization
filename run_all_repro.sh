@@ -29,11 +29,8 @@ echo "##############################################"
 
 for sys in "${SYSTEMS[@]}"; do
     for model in "${MODELS[@]}"; do
-        if [[ "$sys" == "dynamo" ]]; then
-            fg_flag="full"
-        else
-            fg_flag="nofull"
-        fi
+        fg_flag="full"
+        #此时全图优化一直开启
         echo "[Kernel] Running $model on $sys with fullgraph=$fg_flag..."
         ./run_single_repro.sh kernel $model $sys $fg_flag
         echo "----------------------------------------------"
@@ -47,11 +44,8 @@ echo "##############################################"
 
 for sys in "${SYSTEMS[@]}"; do
     for model in "${MODELS[@]}"; do
-        if [[ "$sys" == "dynamo" ]]; then
-            fg_flag="full"
-        else
-            fg_flag="nofull"
-        fi
+        fg_flag="full"
+        #此时全图优化一直开启
         echo "[E2E] Running $model on $sys with fullgraph=$fg_flag..."
         ./run_single_repro.sh e2e $model $sys $fg_flag
         echo "----------------------------------------------"

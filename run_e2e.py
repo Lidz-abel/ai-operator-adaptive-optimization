@@ -14,7 +14,6 @@ from compile import compile
 
 from transformers import AutoConfig, AutoTokenizer
 
-
 def llm_setup(weight_path, seqlen, layer_num):
   device = torch.cuda.current_device()
 
@@ -89,6 +88,8 @@ def main(model, system, seqlen, layer_num, platform,fullgraph):
     output_names=output_names,
     system=system,
   )
+  if fullgraph and system == 'our':
+    kernel_f = torch._dynamo.disable(kernel_f)
 
   weight_zoo_path = os.path.dirname(os.path.abspath(__file__)) + "/weight_zoo.json"
   print(f"{weight_zoo_path=}")

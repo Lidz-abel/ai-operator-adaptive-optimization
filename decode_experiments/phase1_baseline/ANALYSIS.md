@@ -1,631 +1,279 @@
-# Phase 1: Prefill vs Decode 性能分析报告
+# Phase 1 Baseline Analysis (方法 - 结果 - 图表 - 讨论)
 
-**实验日期**: 2026-02-27  
-**模型**: H2O (Heavy-Hitter Oracle)  
-**硬件**: NVIDIA GeForce RTX 3090 (24GB GDDR6X)  
-**测试配置**: Batch Size=1, Heads=32, Head Dim=128, FP16  
-**CUDA版本**: 12.1  
-**PyTorch版本**: 2.2.2+cu121
+> 数据来源：`results/prefill_vs_decode_{h2o,attn,roco}_20260306_181022.json`  
+> 平台：RTX 3090 24GB (`cuda:7`), CUDA 12.1, PyTorch 2.2.2+cu121
 
----
+## 方法（含关键代码与具体计算/测算方式）
 
-## 执行摘要
+### 1. 实验设置
 
-本报告通过严格的 Kernel 级性能测试，对比了 H2O 注意力机制在 Prefill 和 Decode 两个阶段的性能特征。实验揭示了三个关键发现：
+- 模型：`h2o`、`attn`、`roco`
+- 阶段：`prefill(q_len=kv_len=N)` 与 `decode(q_len=1, kv_len=N)`
+- 上下文：`N in {2048, 4096, 8192}`
+- 计时：`warmup=10`, `runs=50`, `repeats=3`
+- DType：`float16`
+- OOM 策略：`skip`（记录 OOM 点并继续）
 
-1. **Decode 阶段存在严重的内存带宽瓶颈**（带宽利用率达 36%，而 Prefill 仅 4.4%）
-2. **Prefill 阶段在长文本（N=8192）下出现性能"崩塌"**（TFLOPS 从 5.2 暴跌至 1.4，下降 73.6%）
-3. **Baseline 实现效率极低**（仅达到 RTX 3090 理论峰值的 3-4%），为后续优化留出巨大空间
+### 2. 关键代码路径（Phase1）
 
-这些发现为 FlashTensor 编译器在 Decode 阶段的优化提供了明确的方向和巨大的优化空间。
+1. 输入构造：`model.prepare(batch_size, q_len, kv_len, dtype, device)`
+2. 后端执行：`compile.py::compile(system='torch')`
+3. 计时主口径：`torch.cuda.synchronize(device)` 包围 wall-clock（与 `asuka_exp.utils.perf` 对齐）
+4. 统计：输出 `median/p95/CV/repeat_cv`
+5. 流量与带宽：`io_lower_bound` 与 `eager_estimate` 两套口径
 
----
+关键代码摘录（来自 `test_prefill_vs_decode.py`）：
 
-## 目录
+```python
+# 计时主口径：sync + wall-clock
+self._synchronize()
+tik = time.time()
+_ = self._forward(f, inputs)
+self._synchronize()
+tok = time.time()
+cur_cpu.append((tok - tik) * 1000.0)
 
-1. [核心发现：TFLOPS "跳水"现象](#1-核心发现tflops-跳水现象)
-2. [内存带宽瓶颈分析](#2-内存带宽瓶颈分析)
-3. [执行时间对比](#3-执行时间对比)
-4. [性能差距增长趋势](#4-性能差距增长趋势)
-5. [显存使用分析](#5-显存使用分析)
-6. [综合性能仪表盘](#6-综合性能仪表盘)
-7. [根本原因分析](#7-根本原因分析)
-8. [研究意义与后续工作](#8-研究意义与后续工作)
-9. [结论](#9-结论)
+# TFLOPS 计算
+def to_tflops(gflops: float, ms: float) -> float:
+    return gflops / (ms / 1000.0) / 1000.0
 
----
+# 带宽利用率计算
+time_s = time_ms / 1000.0
+achieved_gbs = traffic_gb / time_s
+utilization = achieved_gbs / theoretical_bandwidth_gbs * 100
+```
 
-## 1. 核心发现：TFLOPS "跳水"现象
+### 3. 具体计算方式（以 TFLOPS 为例）
 
-### 图表 1: 计算吞吐量分析
+Phase1 的 dense FLOPs 定义：
 
-![TFLOPS Dive](plots/h2o_tflops_dive.png)
+```text
+dense_flops = 4 * B * H * q_len * kv_len * D
+dense_gflops = dense_flops / 1e9
+TFLOPS = dense_gflops / (median_ms / 1000) / 1000
+```
 
-**图表说明**: 
-- 横轴为 Context Length（2048, 4096, 8192）
-- 纵轴为计算吞吐量（TFLOPS/s）
-- 蓝色曲线（圆点）表示 Prefill 阶段
-- 紫色曲线（方块）表示 Decode 阶段
-- 灰色虚线表示 RTX 3090 FP16 理论峰值（~35.6 TFLOPS）
-- 红色标注指出 N=8192 时 Prefill 的性能"跳水"
+示例（RoCo, Decode, `N=4096`）：
 
-### 关键数据
+```text
+B=1, H=32, q_len=1, kv_len=4096, D=128
+dense_flops = 4*1*32*1*4096*128 = 67,108,864
+dense_gflops = 0.067108864
+median_ms = 0.2339
+TFLOPS = 0.067108864 / 0.0002339 / 1000 = 0.2869
+```
 
-| Context Length | Prefill TFLOPS | Decode TFLOPS | Prefill 相对 4096 | RTX 3090 利用率 |
-|---------------|---------------|---------------|------------------|----------------|
-| 2048 | 4.92 | 0.14 | 0.94x | 13.8% / 0.4% |
-| 4096 | 5.23 | 0.30 | 1.00x (基准) | 14.7% / 0.8% |
-| **8192** | **1.38** | 0.36 | **0.26x (崩塌!)** | **3.9%** / 1.0% |
+与结果文件一致（`gpu_tflops_per_sec = 0.2869`）。
 
-> **RTX 3090 FP16 理论峰值**: ~35.6 TFLOPS (Tensor Core)
+### 4. 具体计算方式（以带宽利用率为例）
 
-### 深度分析
+```text
+achieved_gbs = memory_traffic_gb / (median_ms / 1000)
+util_percent = achieved_gbs / theoretical_bandwidth_gbs * 100
+```
+
+其中 `theoretical_bandwidth_gbs=936`（RTX 3090）。
+
+## 结果
+
+### 1. 时间与比例（主口径 median）
 
-#### 1.1 Prefill 的性能"崩塌"
+| Model | Prefill@2048 (ms) | Decode@2048 (ms) | Ratio@2048 | Prefill@4096 (ms) | Decode@4096 (ms) | Ratio@4096 | Prefill@8192 |
+|---|---:|---:|---:|---:|---:|---:|---|
+| attn | 6.3012 | 0.1874 | 33.62x | 23.8736 | 0.2087 | 114.37x | OOM |
+| h2o  | 6.8926 | 0.2031 | 33.93x | 26.2365 | 0.2133 | 123.02x | OOM |
+| roco | 8.7168 | 0.2313 | 37.69x | 33.5368 | 0.2339 | 143.39x | OOM |
+
+### 2. Decode 带宽趋势（BW lower）
+
+| Model | BW@2048 | BW@4096 | BW@8192 |
+|---|---:|---:|---:|
+| attn | 17.82% | 32.00% | 52.40% |
+| h2o  | 16.57% | 31.56% | 45.09% |
+| roco | 14.67% | 29.00% | 49.56% |
+
+### 3. 显存峰值增量（MB）
+
+| Model | Prefill@2048 | Prefill@4096 | Decode@2048 | Decode@4096 | Decode@8192 |
+|---|---:|---:|---:|---:|---:|
+| attn | 1288.00 | 5152.00 | 0.63 | 1.26 | 2.52 |
+| h2o  | 1288.00 | 5152.00 | 0.64 | 1.27 | 2.52 |
+| roco | 1368.50 | 5185.00 | 1.14 | 2.27 | 4.52 |
+
+## 图表
+
+以下给出“逐图说明”示例。论文正文建议以 RoCo 图作为主图（其趋势最清晰），其余模型作为补充附图。
+
+### 图1：执行时间对比（RoCo）
 
-**现象描述**:
-- 从 N=4096 到 N=8192，计算量理论上增加 **4 倍**（O(N²) 复杂度）
-- 预期执行时间应为 `26ms × 4 = 104ms`
-- **实际执行时间**: `398ms`（增加了 **15 倍**！）
-- **TFLOPS 暴跌**: 从 5.23 降至 1.38（下降 **73.6%**）
+![图1 RoCo 执行时间对比](plots/roco_execution_time.png)
+
+1. 实验内容与方法  
+   - 对 `N={2048,4096,8192}` 分别测量 Prefill/Decode 的 median 时间。  
+   - 计时口径使用 `sync + wall-clock`（主口径），每点 `10 warmup + 50 runs + 3 repeats`。  
+2. 结果与分析  
+   - Prefill: `8.7168ms -> 33.5368ms`（`2048->4096` 约 `3.85x`）。  
+   - Decode: `0.2313ms -> 0.2339ms -> 0.2737ms`，增长显著更慢。  
+   - Prefill 在 `8192` OOM。  
+3. 讨论  
+   - Prefill 增长速度远高于 Decode，符合 attention 在 prefill 下更高复杂度特征。  
+   - Decode 单步时延较小，但整体生成时延会随步数累计。  
 
-**根本原因分析**:
+### 图2：Prefill/Decode 时间比（RoCo）
 
-**原因 1: 显存压力触发内存管理开销**
-- N=8192 时 Prefill 占用 **20.9 GB** 显存（接近 RTX 3090 的 24 GB 上限）
-- 触发了 CUDA 内存分配器的碎片整理或页面交换机制
-- 内存管理开销呈非线性增长
+![图2 RoCo 时间比增长](plots/roco_time_ratio_growth.png)
 
-**原因 2: O(N²) 内存访问爆炸**
-- Prefill 需要存储完整的 N×N 注意力矩阵
-- 8192² = 67M 个元素（FP16: 134 MB per head，32 heads = **4.3 GB**）
-- 加上 QKV 张量和中间结果，总内存流量超过 **16 GB**
-- **内存带宽利用率暴跌至 4.36%**，说明大量时间浪费在内存寻址和缓存失效上
+1. 实验内容与方法  
+   - 计算 `ratio = prefill_median / decode_median`。  
+   - 同时绘制理论 dense 比率曲线（`~N`）作参考。  
+2. 结果与分析  
+   - `N=2048` 时比值约 `37.69x`；`N=4096` 时约 `143.39x`。  
+   - 比值随 N 快速上升，显示两阶段扩展性差异显著。  
+3. 讨论  
+   - 该图直接支撑“Prefill 是长上下文主要时延来源”。  
+   - `N=8192` 的比值缺失源于 Prefill OOM，属于硬件容量边界而非统计缺失。  
 
-**原因 3: H2O 算法的 Heavy-Hitter 筛选开销**
-- H2O 需要对每个 head 的 8192 个 Token 进行重要性排序
-- 排序复杂度 O(N log N)，在 N=8192 时开销显著
-- 可能未使用高效的 TopK 实现（如 Radix Select）
+### 图3：带宽利用率趋势（RoCo）
 
-**数学验证**
+![图3 RoCo 带宽利用率](plots/roco_bandwidth_trend.png)
 
-理论计算量（FLOPs）:
+1. 实验内容与方法  
+   - 使用 `io_lower_bound` 流量口径估算 `BW(lower)%`。  
+   - 公式：`util% = traffic_gb / time_s / 936 * 100`。  
+2. 结果与分析  
+   - Decode 带宽利用率由 `14.67%`（2048）升至 `49.56%`（8192）。  
+   - Prefill 带宽利用率较低（`0.77%` 到 `0.40%`）。  
+3. 讨论  
+   - Decode 随上下文增长明显趋于 memory-bound。  
+   - Prefill 在本口径下带宽占比低，说明瓶颈不只是“纯带宽”，还受到大中间张量与容量压力影响。  
 
-- Prefill 4096: 4 × 1 × 32 × 4096² × 128 / 2 = 137.4 GFLOPs
-- Prefill 8192: 4 × 1 × 32 × 8192² × 128 / 2 = 549.8 GFLOPs (4倍)
+### 图4：显存峰值增量（RoCo）
 
-实际执行时间:
+![图4 RoCo 显存峰值增量](plots/roco_memory_usage.png)
 
-- Prefill 4096: 26.29 ms
-- Prefill 8192: 398.61 ms (15.2倍!)
+1. 实验内容与方法  
+   - 统计 `peak_allocated_delta_mb = peak_alloc - base_alloc`。  
+   - 在相同 device 上执行单次 forward 后读取 peak。  
+2. 结果与分析  
+   - Prefill: `1368.50MB`（2048）到 `5185.00MB`（4096），增量明显。  
+   - Decode: `1.14MB`（2048）到 `4.52MB`（8192），仅 MB 级。  
+3. 讨论  
+   - 该图直接解释了 `8192 Prefill OOM` 的根本原因：激活/中间张量占用随 N 快速上升。  
+   - Decode 显存增量小，主要压力不在容量，而在访存吞吐。  
 
-理论时间 vs 实际时间:
+### 图5：TFLOPS 趋势（RoCo）
 
-- 理论: 26.29 × 4 = 105.16 ms
-- 实际: 398.61 ms
-- 额外开销: 398.61 - 105.16 = 293.45 ms (279% 额外开销!)
+![图5 RoCo TFLOPS 趋势](plots/roco_tflops_dive.png)
 
+1. 实验内容与方法  
+   - 使用 dense FLOPs 口径计算 `TFLOPS = dense_gflops / time_s / 1000`。  
+   - 与时间图互相校验计算效率变化。  
+2. 结果与分析  
+   - Prefill 在 `N=2048/4096` 约 `7.88~8.20 TFLOPS`。  
+   - Decode 从 `0.1451` 提升到 `0.4904 TFLOPS`，但绝对值仍远低于 Prefill。  
+3. 讨论  
+   - Decode TFLOPS 低并不代表“实现错误”，而是其工作集与算术强度天然更低。  
+   - 该图和带宽图联合表明：Decode 优化重点应放在访存与融合，而非仅追求算力峰值。  
 
-**关键结论**: 从图表中可以清晰看到，Prefill 的 TFLOPS 曲线在 N=8192 处出现明显的"跳水"，而 Decode 的曲线则平稳上升。这证明了虽然 Decode 慢，但 Prefill 在长文本下的 O(N²) 内存/计算爆炸才是真正的灾难。
+### 图6：综合仪表盘（RoCo）
 
-#### 1.2 Decode 的稳定增长
+![图6 RoCo 综合仪表盘](plots/roco_dashboard.png)
 
-**现象描述**:
-- Decode 的 TFLOPS 随 context_len 稳定增长：0.14 → 0.30 → 0.36
-- 增长趋势符合 O(N) 复杂度预期
-- 性能瓶颈稳定在内存带宽上（见第 2 节分析）
+1. 实验内容与方法  
+   - 将时间、TFLOPS、带宽、显存 4 个维度合并展示。  
+   - 用于快速检查结论是否一致、是否有单指标误导。  
+2. 结果与分析  
+   - 时间维度：Prefill 快速增长且 `8192` OOM。  
+   - 带宽维度：Decode 随 N 上升最明显。  
+   - 显存维度：Prefill 增量远大于 Decode。  
+3. 讨论  
+   - 该图可作为论文总览图：一图同时支持“Prefill 容量/复杂度瓶颈 + Decode 带宽瓶颈”。  
+   - 建议正文主放 dashboard，子图放 execution time 与 bandwidth trend，形成“现象-机制”闭环。  
 
-**原因分析**:
-- Decode 只处理 1×N 的张量，内存占用极小（<140 MB）
-- 没有触发显存管理的临界点
-- 计算量太小，GPU 计算单元大量闲置，等待内存数据
+## 讨论
 
-#### 1.3 与 RTX 3090 理论峰值的对比
+### 1. 主要结论
 
-**关键洞察**:
-- Prefill 最高: 5.23 TFLOPS（**14.7% 利用率**）
-- Decode 最高: 0.36 TFLOPS（**1.0% 利用率**）
-- **结论**: Baseline H2O 实现效率极低，存在巨大优化空间
+1. Prefill 在 `2048->4096` 近似 `~4x` 增长，符合 attention 主项二次增长特征。  
+2. Decode 增长显著更慢，但带宽利用率随 N 明显升高，呈现更强 memory-bound 特征。  
+3. `8192` 上三种模型的 Prefill 全部 OOM，给出了 24GB 显存下的容量边界。  
 
-**优化潜力估算**:
-- 如果通过 FlashTensor 优化将 Prefill 提升到 20 TFLOPS（56% 利用率）
-  - 性能提升: **3.8x**
-- 如果将 Decode 提升到 5 TFLOPS（14% 利用率）
-  - 性能提升: **13.9x**
+### 2. 稳定性与异常点
 
----
+1. 大多数点 `CV < 0.05`。  
+2. `h2o prefill@4096` 的 wall-clock `CV=5.5843` 为异常值，但该点 `GPU Event CV=0.0031`、`repeat_cv=0.0013`，更像单次系统抖动造成；结论应优先使用 `median/p95`。  
 
-## 2. 内存带宽瓶颈分析
+### 3. 局限与下一步
 
-### 图表 2: 内存带宽利用率趋势
+1. 本阶段仅 `torch` 后端、单卡 3090，且属于 kernel 级实验。  
+2. `8192` Prefill 缺失有效点，后续可在更大显存卡补齐。  
+3. 下一阶段可将该结论作为 decode 图分析和 fused-kernel 设计的 baseline 依据。  
 
-![Bandwidth Trend](plots/h2o_bandwidth_trend.png)
+## 附录A：调用流程链（对应 `test_prefill_vs_decode.py`）
 
-**图表说明**:
-- 横轴为 Context Length（2048, 4096, 8192）
-- 纵轴为内存带宽利用率（%）
-- 绿色曲线（圆点）表示 Prefill 阶段
-- 黄色曲线（方块）表示 Decode 阶段
-- 黄色标注指出 Decode 在 N=8192 时的内存带宽瓶颈（36%）
-- 绿色标注指出 Prefill 在 N=8192 时的带宽崩塌（仅 4.4%）
+![附录A 调用流程链（可视化）](plots/appendix_a_call_flow.png)
 
-### 关键数据
+流程图源文件：`plots/appendix_a_call_flow.dot`（可用 `dot -Tpng/-Tsvg` 重新导出）。
 
-| Context Length | Prefill BW (%) | Decode BW (%) | 内存流量 (GB) | 瓶颈类型 |
-|---------------|---------------|--------------|--------------|---------|
-| 2048 | 16.25 | 14.03 | 1.06 / 0.03 | 计算密集 / 内存密集 |
-| 4096 | 16.77 | 30.08 | 4.13 / 0.06 | 计算密集 / 内存密集 |
-| **8192** | **4.36** | **36.05** | 16.25 / 0.13 | **内存墙 / 内存墙** |
+说明：
 
-> **RTX 3090 理论带宽**: 936 GB/s (GDDR6X)
+1. 主流程是“每个 `context_len` 下，固定跑一对 `prefill + decode`”。
+2. 指标链路固定为：时间 -> 显存 -> 流量 -> FLOPs -> 派生 TFLOPS/带宽利用率。
+3. `oom_policy=skip` 时，单点 OOM 不中断整组实验。
 
-### 深度分析
+## 附录B：关键统计口径与计算方式
 
-#### 2.1 Decode 的内存带宽瓶颈
+### B.1 时间口径
 
-**核心发现**: Decode 的带宽利用率随 context_len 显著提升（14% → 30% → 36%）
+| 口径 | 代码实现 | 计算方式 | 输出字段（示例） |
+|---|---|---|---|
+| 主口径（sync + wall-clock） | `tik=time.time(); forward; tok=time.time()`，前后 `torch.cuda.synchronize()` | `time_ms = (tok - tik) * 1000` | `gpu_median_time_ms`, `gpu_p95_time_ms`, `gpu_cv` |
+| 次口径（GPU Event） | `start_evt.record(); forward; end_evt.record()` | `elapsed_ms = start_evt.elapsed_time(end_evt)` | `gpu_event_median_time_ms`, `gpu_event_p95_time_ms`, `gpu_event_cv` |
+| 稳健统计 | `summarize_times_ms` | `avg/min/max/std/median/p05/p10/p90/p95/p99/cv`，其中 `cv=std/avg` | `*_avg_time_ms`, `*_median_time_ms`, `*_p95_time_ms`, `*_cv` |
+| repeat 间稳定性 | 对每个 repeat 先求 mean，再对 mean 序列做统计 | `repeat_cv = std(repeat_means)/mean(repeat_means)` | `repeat_gpu_cv`, `repeat_cpu_cv` |
 
-**学术解读**:
-- 在 Batch Size = 1 时，Decode 的计算量极小（0.13 GFLOPs）
-- GPU 绝大部分时间在等待显存把 KV Cache 读进来
-- **36% 的带宽利用率在 BS=1 情况下已经相当高**
-- 这说明 H2O 算子的 Decode 实现对缓存和内存对齐处理得不错
-- 但它也明确触碰到了 **Memory Wall**
+注：历史字段命名沿用 `gpu_*`，但主口径数值来自 `sync + wall-clock`（与 `asuka_exp.utils.perf` 对齐）。
 
-**内存访问模式分析**:
-Decode (q_len=1, kv_len=8192):
+### B.2 FLOPs / TFLOPS 口径
 
-1.读取 Q: 1 × 32 × 128 × 2 bytes = 8 KB
+设 `B=batch_size, H=head_num, Q=q_len, K=kv_len, D=head_dim`。
 
-2.读取 K: 8192 × 32 × 128 × 2 bytes = 64 MB
+| 口径 | 公式 | 字段 |
+|---|---|---|
+| dense pairs | `dense_pairs = Q * K` | `flops_dense_pairs` |
+| causal valid pairs | `valid_pairs = Q*K - Q*(Q-1)/2` | `flops_causal_valid_pairs` |
+| dense FLOPs | `dense_flops = 4 * B * H * dense_pairs * D` | `flops_dense_gflops`（/1e9） |
+| causal FLOPs | `causal_flops = 4 * B * H * valid_pairs * D` | `flops_causal_gflops`（/1e9） |
+| TFLOPS | `tflops = gflops / (time_ms/1000) / 1000` | `gpu_tflops_per_sec`, `gpu_tflops_per_sec_causal` |
 
-3.读取 V: 8192 × 32 × 128 × 2 bytes = 64 MB
+### B.3 流量 / 带宽口径
 
-4.写入 Output: 1 × 32 × 128 × 2 bytes = 8 KB
+| 口径 | 公式 | 字段 |
+|---|---|---|
+| tensor 字节数 | `nbytes(t)=t.numel()*t.element_size()` | - |
+| IO 下界流量 | `io_lower_bound_bytes = input_read_bytes + output_write_bytes` | `memory_traffic_gb` |
+| eager 估算流量 | `eager_estimate_bytes = io_lower_bound + scores_rw + probs_rw + mask_rw` | `memory_traffic_eager_estimate_gb` |
+| 中间张量估算 | `scores_rw=2*(B*H*Q*K*bytes_per_qk)`；`probs_rw=2*(B*H*Q*K*4)`；`mask_rw=2*(Q*K*bytes_per_qk)` | `memory_breakdown.*` |
+| 实际带宽 | `achieved_gbs = traffic_gb / (time_ms/1000)` | `achieved_bandwidth_gbs` |
+| 带宽利用率 | `util% = achieved_gbs / theoretical_bandwidth_gbs * 100` | `bandwidth_utilization_percent` |
 
-5.总内存流量: ~130 MB 执行时间: 0.376 ms 实际带宽: 130 MB / 0.376 ms = 345.7 GB/s 利用率: 345.7 / 936 = 36.9%
+补充：
 
+1. `bandwidth_utilization_percent` 使用 `io_lower_bound + median` 作为默认展示口径。
+2. 同时提供 `bandwidth_lower_bound_avg_util_percent` 与 `bandwidth_eager_estimate_util_percent` 作为对照。
 
-**为什么无法达到更高的带宽利用率？**
-1. **Kernel 启动开销**: 每次 Decode 都需要启动 Kernel（~10-20 μs）
-2. **内存访问模式**: 非连续访问导致缓存失效
-3. **计算/访存比过低**: 计算太少，无法隐藏内存延迟
+### B.4 显存口径
 
-**关键结论**: 从图表中可以看到，Decode 的带宽利用率曲线稳步上升，在 N=8192 时达到 36%，这表明 Decode 阶段确实受到内存带宽的严重限制。
+| 口径 | 计算方式 | 字段 |
+|---|---|---|
+| base 显存 | forward 前读取 `memory_allocated/memory_reserved` | `base_memory_allocated_mb`, `base_memory_reserved_mb` |
+| peak 显存 | `reset_peak_memory_stats` 后跑一次 forward，再读取 `max_memory_*` | `peak_memory_mb`, `peak_memory_reserved_mb` |
+| peak 增量 | `peak_delta = max(0, peak - base)` | `peak_memory_delta_mb`, `peak_memory_reserved_delta_mb` |
 
-#### 2.2 Prefill 的带宽崩塌
+### B.5 阶段对比口径（Prefill vs Decode）
 
-**核心发现**: Prefill 在 N=8192 时带宽利用率暴跌至 4.36%
-
-**原因分析**:
-1. **显存容量瓶颈**: 20.9 GB 接近上限，触发内存管理开销
-2. **L2 Cache 颠簸**: 67M 元素的注意力矩阵远超 L2 Cache（6 MB）
-3. **内存访问碎片化**: 大量随机访问导致 DRAM 效率低下
-
-**对比分析**:
-
-Prefill 4096:
-
-- 内存流量: 4.13 GB
-- 执行时间: 26.29 ms
-- 实际带宽: 157 GB/s
-- 利用率: 16.77%
-
-Prefill 8192:
-
-- 内存流量: 16.25 GB
-- 执行时间: 398.61 ms
-- 实际带宽: 40.8 GB/s (暴跌 74%!)
-- 利用率: 4.36%
-
-
-**关键洞察**: Prefill 在长文本下不是计算瓶颈，而是**内存管理瓶颈**！图表清晰地展示了这一点：Prefill 的带宽利用率在 N=8192 时急剧下降，而 Decode 则持续上升。
-
----
-
-## 3. 执行时间对比
-
-### 图表 3: GPU 和 CPU 计时对比
-
-![Execution Time](plots/h2o_execution_time.png)
-
-**图表说明**:
-- 左图为 GPU Event 计时（精确的 GPU 执行时间）
-- 右图为 CPU time.time() 计时（与源代码对齐）
-- 蓝色/绿色柱状图表示 Prefill 阶段
-- 紫色/黄色柱状图表示 Decode 阶段
-- 柱状图上方标注了具体的执行时间（ms）
-
-### 关键数据
-
-| Context | Prefill GPU (ms) | Prefill CPU (ms) | Decode GPU (ms) | Decode CPU (ms) | GPU/CPU 差异 |
-|---------|-----------------|-----------------|----------------|----------------|-------------|
-| 2048 | 6.99 | 6.97 | 0.24 | 0.23 | -0.3% / -4.3% |
-| 4096 | 26.29 | 26.29 | 0.23 | 0.22 | 0.0% / -4.5% |
-| 8192 | 398.61 | 397.30 | 0.38 | 0.38 | -0.3% / 0.0% |
-
-### 深度分析
-
-#### 3.1 计时准确性验证
-
-**核心发现**: GPU Event 和 CPU time.time() 计时高度一致（误差 <0.5%）
-
-**专业解读**:
-- 在 2048 和 4096 规模下，CPU 和 GPU 耗时几乎重合
-- 这说明 `torch.cuda.synchronize()` 位置非常准确
-- N=8192 时，CPU 时间（397.30ms）甚至略小于 GPU Event 时间（398.61ms）
-
-**为什么 CPU 时间会略小？**
-- `time.time()` 测量的是 CPU 提交任务的时间轴
-- `torch.cuda.Event` 记录的是硬件底层的精确刻度
-- 这种极小的误差（<0.5%）证明了实验的**高置信度**
-
-**关键结论**: 从图表中可以看到，左右两图的柱状图高度几乎完全一致，这验证了我们的计时方法是准确可靠的。
-
-#### 3.2 Prefill vs Decode 时间对比
-
-**核心发现**: Prefill 和 Decode 的时间差距随 context_len 指数增长
-
-时间比率（Prefill / Decode）:
-
-- 2048: 6.99 / 0.24 = 29.1x
-- 4096: 26.29 / 0.23 = 114.3x
-- 8192: 398.61 / 0.38 = 1048.4x
-
-
-**增长趋势分析**:
-- 理论比率应为 N/2（因果掩码）
-- 实际比率远小于理论值（8192 理论应为 4096x，实际只有 1048x）
-- **原因**: Decode 太快，固定开销（Kernel 启动）占比大
-
-**关键结论**: 图表直观地展示了 Prefill 和 Decode 之间巨大的性能差距，特别是在 N=8192 时，Prefill 的柱状图高度远超 Decode。
-
----
-
-## 4. 性能差距增长趋势
-
-### 图表 4: Prefill/Decode 时间比率增长
-
-![Time Ratio Growth](plots/h2o_time_ratio_growth.png)
-
-**图表说明**:
-- 横轴为 Context Length（2048, 4096, 8192）
-- 纵轴为 Prefill/Decode 时间比率
-- 蓝色曲线（圆点）表示 GPU Event 测量的比率
-- 绿色曲线（方块）表示 CPU time.time() 测量的比率
-- 灰色虚线表示理论比率（N/2）
-- 曲线上方标注了实际比率值，虚线下方标注了理论值
-
-### 关键数据
-
-| Context | GPU Ratio | CPU Ratio | 理论 Ratio (N/2) | 实际/理论 |
-|---------|-----------|-----------|-----------------|----------|
-| 2048 | 28.90x | 30.72x | 1024x | 2.8% / 3.0% |
-| 4096 | 116.60x | 120.70x | 2048x | 5.7% / 5.9% |
-| 8192 | 1059.45x | 1053.28x | 4096x | 25.9% / 25.7% |
-
-### 深度分析
-
-#### 4.1 为什么实际比率远小于理论值？
-
-**理论分析**:
-- Prefill 计算量: `(1/2) × N²`（因果掩码）
-- Decode 计算量: `1 × N`
-- 理论比率: `N / 2`
-
-**实际观测**:
-- 对于 N=8192，理论比率应为 4096x
-- 实际观测值是 1059x（**仅为理论值的 25.9%**）
-
-**差距原因**:
-
-**原因 1: Decode 的固定开销**
-- Decode 执行时间: 0.376 ms = 376 μs
-- Kernel 启动开销: ~10-20 μs
-- 固定开销占比: 10-20 / 376 = **2.7%-5.3%**
-- 内存寻址延迟、框架开销等进一步拉低效率
-
-**原因 2: Prefill 的性能崩塌**
-- 如果 Prefill 8192 能达到理论性能（104 ms）
-- 比率将是: 104 / 0.376 = 276x
-- 仍然远小于理论值 4096x
-
-**原因 3: 内存带宽限制**
-- Decode 受内存带宽限制，无法达到理论计算速度
-- 即使计算量小，也需要等待内存数据
-
-**关键结论**: 从图表中可以看到，实际比率曲线（蓝色和绿色）远低于理论曲线（灰色虚线），且两者之间的差距随着 N 的增加而缩小。这说明在长文本下，Prefill 的性能崩塌使得实际比率更接近理论值。
-
-#### 4.2 比率增长趋势
-
-**核心发现**: 实际比率随 N 增长，但增速低于理论
-
-实际比率增长:
-
-- 2048 → 4096: 28.90 → 116.60 (4.0x)
-- 4096 → 8192: 116.60 → 1059.45 (9.1x)
-理论比率增长:
-
-- 2048 → 4096: 1024 → 2048 (2.0x)
-- 4096 → 8192: 2048 → 4096 (2.0x)
-
-
-**关键洞察**: 
-- 实际比率增长**快于**理论增长（4.0x vs 2.0x，9.1x vs 2.0x）
-- **原因**: Prefill 在 8192 时的性能崩塌导致比率异常增长
-
----
-
-## 5. 显存使用分析
-
-### 图表 5: GPU 显存使用对比
-
-![Memory Usage](plots/h2o_memory_usage.png)
-
-**图表说明**:
-- 横轴为 Context Length（2048, 4096, 8192）
-- 纵轴为峰值显存使用（MB）
-- 橙色柱状图表示 Prefill 阶段
-- 红色柱状图表示 Decode 阶段
-- 红色虚线表示 RTX 3090 的显存上限（24 GB = 24576 MB）
-- 柱状图上方标注了具体的显存使用量
-
-### 关键数据
-
-| Context | Prefill Memory (MB) | Decode Memory (MB) | 比率 | 占用率 (24GB) |
-|---------|--------------------|--------------------|------|--------------|
-| 2048 | 1,360 | 41 | 33.2x | 5.5% / 0.2% |
-| 4096 | 5,289 | 74 | 71.5x | 21.5% / 0.3% |
-| **8192** | **20,873** | 140 | 149.1x | **84.9%** / 0.6% |
-
-> **RTX 3090 总显存**: 24,576 MB
-
-### 深度分析
-
-#### 5.1 Prefill 的显存压力
-
-**核心发现**: Prefill 8192 占用 20.9 GB，接近 RTX 3090 的 24 GB 上限
-
-**显存分解**:
-
-Prefill 8192 显存占用:
-
-1.Q 张量: 1 × 8192 × 32 × 128 × 2 bytes = 64 MB
-
-2.K 张量: 1 × 8192 × 32 × 128 × 2 bytes = 64 MB
-
-3.V 张量: 1 × 8192 × 32 × 128 × 2 bytes = 64 MB
-
-4.注意力矩阵: 1 × 32 × 8192 × 8192 × 2 bytes = 4,294 MB
-
-5.Softmax 结果: 1 × 32 × 8192 × 8192 × 2 bytes = 4,294 MB
-
-6.Output: 1 × 8192 × 32 × 128 × 2 bytes = 64 MB
-
-7.H2O Score: 1 × 32 × 8192 × 2 bytes = 0.5 MB
-
-8.中间变量和梯度: ~12,000 MB
-
-总计: ~20,900 MB
-
-
-**关键洞察**:
-- 注意力矩阵和 Softmax 结果占用了 **8.6 GB**（41%）
-- 这是 O(N²) 内存复杂度的直接体现
-- 当接近显存上限时，CUDA 内存分配器开销显著增加
-
-**关键结论**: 从图表中可以清晰看到，Prefill 在 N=8192 时的橙色柱状图几乎触及红色虚线（显存上限），这直观地展示了显存压力问题。
-
-#### 5.2 Decode 的显存效率
-
-**核心发现**: Decode 显存占用极小（<140 MB），随 N 线性增长
-
-**显存分解**:
-
-Decode 8192 显存占用:
-
-1.Q 张量: 1 × 1 × 32 × 128 × 2 bytes = 8 KB
-
-2.K 张量: 1 × 8192 × 32 × 128 × 2 bytes = 64 MB
-
-3.V 张量: 1 × 8192 × 32 × 128 × 2 bytes = 64 MB
-
-4.注意力矩阵: 1 × 32 × 1 × 8192 × 2 bytes = 0.5 MB
-
-5.Softmax 结果: 1 × 32 × 1 × 8192 × 2 bytes = 0.5 MB
-
-6.Output: 1 × 1 × 32 × 128 × 2 bytes = 8 KB
-
-7.H2O Score: 1 × 32 × 8192 × 2 bytes = 0.5 MB
-
-总计: ~140 MB
-
-
-**关键洞察**:
-- Decode 的显存占用主要来自 KV Cache（128 MB）
-- 注意力矩阵只有 0.5 MB（Prefill 的 1/8588）
-- 显存效率极高，不会触发内存管理开销
-
-**关键结论**: 图表中 Decode 的红色柱状图几乎看不见，与 Prefill 的橙色柱状图形成鲜明对比，直观地展示了两者在显存使用上的巨大差异。
-
-#### 5.3 显存占用比率分析
-
-**核心发现**: Prefill/Decode 显存比率随 N 增长（33x → 71x → 149x）
-
-**数学验证**:
-
-理论比率:
-
-- Prefill: O(N²)
-- Decode: O(N)
-- 比率: O(N)
-
-实际比率:
-
-- 2048: 33.2x ≈ 2048 / 61.7
-- 4096: 71.5x ≈ 4096 / 57.3
-- 8192: 149.1x ≈ 8192 / 54.9
-
-结论: 实际比率符合 O(N) 增长趋势
-
-
----
-
-## 6. 综合性能仪表盘
-
-### 图表 6: 综合性能仪表盘
-
-![Dashboard](plots/h2o_dashboard.png)
-
-**图表说明**:
-- 左上：计算吞吐量（TFLOPS/s）曲线图
-- 右上：内存带宽利用率（%）柱状图
-- 左下：GPU 执行时间（ms）柱状图
-- 右下：GPU 显存使用（MB）柱状图，包含显存上限参考线
-
-
----
-
-## 6. 综合性能仪表盘
-
-### 图表 6: 综合性能仪表盘
-
-![Dashboard](plots/h2o_dashboard.png)
-
-### 综合分析
-
-这个仪表盘综合展示了四个关键指标：
-
-1. **计算吞吐量（左上）**: Prefill 在 8192 时的性能崩塌
-2. **内存带宽（右上）**: Decode 的带宽瓶颈，Prefill 的带宽崩塌
-3. **执行时间（左下）**: Prefill/Decode 的时间差距指数增长
-4. **显存使用（右下）**: Prefill 接近显存上限
-
-**关键洞察**:
-- 四个指标相互印证，形成完整的性能画像
-- Prefill 和 Decode 的瓶颈完全不同：
-  - **Prefill**: 显存容量 + 内存管理开销
-  - **Decode**: 内存带宽 + Kernel 启动开销
-
----
-
-## 7. 根本原因分析
-
-### 7.1 Prefill 性能崩塌的根本原因
-
-**原因 1: O(N²) 内存复杂度**
-- 注意力矩阵大小: N × N
-- 8192² = 67M 元素 = 4.3 GB（32 heads）
-- 远超 L2 Cache（6 MB），导致大量 DRAM 访问
-
-**原因 2: 显存接近上限触发内存管理开销**
-- 20.9 GB / 24 GB = 87% 占用率
-- CUDA 内存分配器需要进行碎片整理
-- 可能触发页面交换或内存压缩
-
-**原因 3: H2O 算法的 TopK 开销**
-- 需要对 8192 个 Token 进行排序
-- O(N log N) 复杂度
-- 可能未使用高效实现
-
-**原因 4: 缓存失效和内存访问碎片化**
-- 大矩阵的随机访问导致 L2 Cache 颠簸
-- DRAM 行缓冲失效率高
-- 内存带宽利用率暴跌至 4.36%
-
-### 7.2 Decode 内存带宽瓶颈的根本原因
-
-**原因 1: 计算/访存比过低**
-- 计算量: 0.13 GFLOPs
-- 内存流量: 130 MB
-- 计算/访存比: 1 FLOPs / byte（极低！）
-
-**原因 2: Kernel 启动开销占比大**
-- 执行时间: 376 μs
-- Kernel 启动: ~10-20 μs
-- 占比: 2.7%-5.3%
-
-**原因 3: 内存访问模式不友好**
-- KV Cache 的非连续访问
-- 缓存失效率高
-- 无法充分利用内存带宽
-
-### 7.3 Baseline 实现效率低的根本原因
-
-**原因 1: 未使用 FlashAttention 优化**
-- 标准实现需要物化完整的注意力矩阵
-- O(N²) 内存占用
-- 无法利用 Tensor Core 的高效计算
-
-**原因 2: 算子未融合**
-- Softmax、Reduce、TopK、Gather 是独立的 Kernel
-- 每个 Kernel 都需要读写全局内存
-- 内存流量放大
-
-**原因 3: 未针对 Decode 优化**
-- Decode 的 1×N 张量无法充分利用 GPU
-- 需要特殊的 Kernel 设计和内存布局
-
----
-
-## 8. 研究意义与后续工作
-
-### 8.1 研究意义
-
-**1. 揭示了 Decode 阶段的性能瓶颈**
-- 明确了内存带宽是 Decode 的主要瓶颈（36% 利用率）
-- 为 FlashTensor 的优化方向提供了明确指引
-
-**2. 发现了 Prefill 在长文本下的性能崩塌**
-- 这是一个重要的研究发现，可能成为论文的亮点
-- 说明了 O(N²) 内存复杂度在实际系统中的严重后果
-
-**3. 量化了优化空间**
-- Baseline 实现仅达到理论峰值的 3-4%
-- 存在 **10x-30x** 的优化潜力
-
-### 8.2 FlashTensor 优化方向
-
-**方向 1: 非凸融合（Non-Convex Fusion）**
-- 将 Softmax、Reduce、TopK、Gather 融合成一个 Kernel
-- 减少内存流量，提高带宽利用率
-- **预期提升**: 3x-5x
-
-**方向 2: 张量属性优化**
-- 利用 Decode 的 1×N 张量特性
-- 优化内存布局和访问模式
-- **预期提升**: 2x-3x
-
-**方向 3: 动态形状支持**
-- 支持 TopK 引入的动态形状
-- 优化 H2O 的 Heavy-Hitter 筛选
-- **预期提升**: 1.5x-2x
-
-**方向 4: 内存流量最小化**
-- 从"最小化中间张量"转变为"最小化内存访问"
-- 针对 Decode 的内存密集型特性
-- **预期提升**: 2x-4x
-
-**综合优化潜力**: **10x-30x**
-
-### 8.3 后续工作
-
-**Phase 2: 计算图分析**
-- 提取 H2O Decode 阶段的计算图
-- 识别算子碎片化程度
-- 使用 Nsight Compute/Systems 进行深度 Profiling
-
-**Phase 3: FlashTensor 属性传播模拟**
-- 手工推演 FlashTensor 的属性分析
-- 验证理论兼容性
-- 识别需要扩展的属性
-
-**Phase 4: 系统改造与实现**
-- 实现动态形状支持
-- 修改启发式搜索算法
-- 实现内存流量最小化目标函数
-
----
-
-
-
+| 指标 | 公式 | 作用 |
+|---|---|---|
+| 时间比（median） | `ratio_median = prefill_median / decode_median` | 衡量两阶段扩展差异 |
+| 时间比（p95） | `ratio_p95 = prefill_p95 / decode_p95` | 衡量尾延迟差异 |
+| 峰值显存增量对比 | `prefill_peak_delta vs decode_peak_delta` | 区分容量压力与带宽压力 |

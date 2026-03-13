@@ -129,7 +129,7 @@ class DynamicShapeEvaluator:
         self.report_data['metadata'].update({'base_seqlen': base_seqlen, 'target_seqlen': target_seqlen})
         
         try:
-            # 0. 实例化并严格同步权重 
+            # 0. 实例化并同步权重 
             cls = KERNEL_ZOO[self.model_name]
             model_base = cls().eval().cuda()
             model_native = cls().eval().cuda()

@@ -1,55 +1,77 @@
-# Phase 1: 基线复现与瓶颈确诊 (RTX 3090)
+# Phase 1 Baseline (Revised)
 
-## 🎯 实验目标
+## 目标
 
-定量证明在带有复杂淘汰逻辑的 Decode 阶段，算子碎片化（Kernel fragmentation）和访存墙（Memory wall）导致了严重的性能退化。
+为 `decode_experiments` 提供可复现、统计稳健的 `prefill vs decode` baseline（kernel 级）。
 
-## 🔬 核心假设
+## 核心改进
 
-### Hypothesis 1: Decode 阶段算子碎片化严重
-**预期**: H2O 在 Decode 阶段会被切分成 3-5 个 Kernel，而 Prefill 阶段只需 1-2 个
+1. 对齐主项目风格：输入构造改为调用模型 `prepare(...)`，兼容额外输入。
+2. 统计更稳健：输出 `median/p95/p99/CV`，并支持 `--repeats`。
+3. FLOPs 口径更清晰：同时输出 `dense executed` 与 `causal effective`。
+4. 带宽口径分离：
+   - `io_lower_bound`（输入读 + 输出写）
+   - `eager_estimate`（再加中间张量估算）
+5. 显存指标更可解释：输出 `peak_delta_mb`，避免把常驻输入误当作阶段开销。
+6. 执行路径对齐官方脚本：通过 `compile.py::compile(system=...)` 调用后端（默认 `torch`）。
 
-### Hypothesis 2: Kernel 启动开销占比高
-**预期**: Decode 阶段的 Kernel 启动开销 > 30%，Prefill 阶段 < 5%
-
-### Hypothesis 3: 内存带宽利用率低
-**预期**: Decode 阶段带宽利用率 < 40%，Prefill 阶段 > 70%
-
-### Hypothesis 4: 相同 KV Cache 被重复读取
-**预期**: H2O Decode 阶段 KV Cache 被读取 3-4 次，理想情况只需 1 次
-
-## 📋 实验配置
-
-### 模型
-- **标准模型**: Llama-2-7b Attention
-- **变体模型**: H2O (带 KV Cache 淘汰机制)
-
-### 测试场景
-基于 RTX 3090 (24GB) 的显存限制：
-
-| 场景 | Context Length | Batch Size | 模式 | 预期显存 | 状态 |
-|------|----------------|------------|------|----------|------|
-| 1 | 2048 | 1 | Prefill | ~17 GB | ✅ 已验证 |
-| 2 | 2048 | 1 | Decode | ~17 GB | 🔄 待测试 |
-| 3 | 4096 | 1 | Prefill | ~18 GB | 🔄 待测试 |
-| 4 | 4096 | 1 | Decode | ~18 GB | 🔄 待测试 |
-| 5 | 8192 | 1 | Prefill | ~21 GB | ⚠️ 接近上限 |
-| 6 | 8192 | 1 | Decode | ~21 GB | ⚠️ 接近上限 |
-
-### 基线系统
-1. **torch**: PyTorch 原生实现
-2. **dynamo**: torch.compile (TorchInductor)
-
-## 🚀 快速开始
-
-### 1. 环境准备
+## 运行
 
 ```bash
-# 确保在项目根目录
-cd /data2/ldz/FlashTensor-AE
+cd /data2/ldz/FlashTensor-AE/decode_experiments/phase1_baseline
+bash run_tests.sh
+```
 
-# 激活环境
-source decode_experiments/decode_env.sh
+脚本会自动选择空闲显存最多的 GPU。  
+如需手动指定，可用：
 
-# 进入 Phase 1 目录
-cd decode_experiments/phase1_baseline
+```bash
+DEVICE_INDEX=3 bash run_tests.sh
+```
+
+默认 `OOM_POLICY=skip`：当某些长上下文（如 8192）OOM 时，记录该点并继续跑其它点。  
+若你希望 OOM 直接失败退出，可用：
+
+```bash
+OOM_POLICY=raise bash run_tests.sh
+```
+
+单次运行示例：
+
+```bash
+python test_prefill_vs_decode.py \
+  --model h2o \
+  --system torch \
+  --context_lengths 2048 4096 8192 \
+  --warmup 10 \
+  --runs 50 \
+  --repeats 3 \
+  --dtype float16
+```
+
+绘图：
+
+```bash
+python plot_results.py --input results/<your_result>.json --output_dir plots
+```
+
+## 输出说明
+
+JSON 主要字段：
+
+1. 兼容旧字段：`gpu_avg_time_ms`、`gpu_tflops_per_sec`、`bandwidth_utilization_percent`、`peak_memory_mb`
+2. 新增字段：
+   - `gpu_median_time_ms` / `gpu_p95_time_ms` / `gpu_cv`
+   - `repeat_gpu_cv`（跨 repeat 的稳定性）
+   - `flops_dense_gflops` / `flops_causal_gflops`
+   - `memory_traffic_eager_estimate_gb`
+   - `peak_memory_delta_mb`
+   - `system` / `input_names` / `output_names`（可审计执行配置）
+
+## 注意
+
+1. 本实验是 **kernel 级 baseline**，不是完整 LLM 端到端吞吐。
+2. 若要做严格跨机对比，请显式设置 `--theoretical_bandwidth_gbs`。
+3. 可通过 `--system` 切换后端，建议先用 `--system torch` 建立基准，再扩展到其他系统。
+4. 若出现 OOM，先检查 `nvidia-smi` 的空闲显存；当空闲显存不足（例如 < 20GB）时，请切换 GPU 或减少 `--context_lengths`。
+5. 计时主口径使用与官方 `perf` 对齐的 `synchronize + wall-clock`；`GPU Event` 作为辅助字段保留在结果中（`gpu_event_*`）。
